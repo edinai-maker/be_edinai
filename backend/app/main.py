@@ -39,7 +39,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=(
             [
-                "https://staticfile-59dce.wasmer.app",
+                "https://staticfile-shubhamc080.wasmer.app/examples/mp3.html",
                 "https://edinai.inaiverse.com",
                 "https://api.edinai.inaiverse.com",
             ]
