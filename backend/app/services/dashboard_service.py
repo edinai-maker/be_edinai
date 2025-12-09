@@ -321,47 +321,15 @@ def get_member_dashboard(*, member_id: int, admin_id: int, work_type: str) -> Di
             }
         }
     else:  # lecture
-        # # lecture_stats = _collect_admin_lecture_metrics(admin_id)
-        # # payload = {
-        # #     "lecture_metrics": lecture_stats,
-        # total_lectures = dashboard_repository.count_total_lectures(admin_id)
-        # played_lectures = dashboard_repository.count_played_lectures(admin_id)
-        # shared_lectures = 0
-        # qa_sessions = 0
-        # pending_lectures = max(total_lectures - played_lectures, 0)
-
-        # return {
-        #     "played_lectures": played_lectures,
-        #     "shared_lectures": shared_lectures,
-        #     "qa_sessions": qa_sessions,
-        #     "total_lectures": total_lectures,
-        #     "pending_lectures": pending_lectures,
-        # }
-
-        total_students = dashboard_repository.count_members(admin_id, work_type="student", active_only=True)
-        total_chapters = dashboard_repository.count_members(admin_id, work_type="chapter", active_only=True)
-        payload = {
-            "lecture_metrics": {
-                "total_students": total_students,
-                "total_chapters": total_chapters,
-                "performance": {
-                    "total_lectures_created": 0,
-                    "total_students_enrolled": total_students,
-                    "average_completion_rate": 0,
-                    "total_watch_time": 0,
-                    "last_lecture_created": None,
-                },
-                "package_limits": (
-                    {
-                        "max_minutes_per_lecture": package["max_minutes_per_lecture"],
-                        "ai_videos_per_lecture": package["ai_videos_per_lecture"],
-                        "topics_per_lecture": package["topics_per_lecture"],
-                        "max_quality": package["max_quality"],
-                    }
-                    if package
-                    else {}
-                ),
-            }
+        total_lectures = dashboard_repository.count_total_lectures(admin_id)
+        played_lectures = dashboard_repository.count_played_lectures(admin_id)
+        pending_lectures = max(total_lectures - played_lectures, 0)
+        return {
+            "total_lectures": total_lectures,
+            "played_lectures": played_lectures,
+            "shared_lectures": 0,
+            "pending_lectures": pending_lectures,
+            "qa_sessions": 0,
         }
 
     plan_label = _normalize_plan_label(admin.get("package") or admin.get("package_plan"))
