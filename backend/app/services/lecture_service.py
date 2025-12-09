@@ -226,29 +226,41 @@ class LectureService:
                 slide.pop("audio_path", None)
         return sanitized
 
-    def _compose_slide_tts_text(self, slide: Dict[str, Any]) -> str:
-        """Build a narration string that includes title, bullets, narration, and questions."""
-        if not isinstance(slide, dict):
-            return ""
-
-        sections: List[str] = []
-
-        title = (slide.get("title") or "").strip()
-        if title:
-            sections.append(f"Slide title: {title}.")
-
-        bullets = slide.get("bullets") or []
-        for idx, bullet in enumerate(bullets, start=1):
-            cleaned = (bullet or "").strip()
-            if cleaned:
-                sections.append(f"Bullet point {idx}: {cleaned}.")
-
-        narration = (slide.get("narration") or "").strip()
-        if narration:
-            sections.append(narration)
-
-        question = (slide.get("question") or "").strip()
-        if question:
-            sections.append(question)
-
-        return " ".join(sections)
+    def _compose_slide_tts_text(self, slide: Dict[str, Any], *, language: str = "English") -> str:
+            """Build a narration string that includes title, bullets, narration, and questions."""
+            if not isinstance(slide, dict):
+                return ""
+            sections: List[str] = []
+            bullets = [
+                (bullet or "").strip()
+                for bullet in slide.get("bullets") or []
+                if (bullet or "").strip()
+            ]
+            if bullets:
+                sections.append(self._format_bullet_summary(bullets, language=language))
+            narration = (slide.get("narration") or "").strip()
+            if narration:
+                sections.append(narration)
+            question = (slide.get("question") or "").strip()
+            if question:
+                sections.append(question)
+            return " ".join(sections)
+    def _format_bullet_summary(self, bullets: List[str], *, language: str = "English") -> str:
+            """Create a natural sentence summarizing slide bullets, localized to the lecture language."""
+            topic_list = self._human_join(bullets).rstrip(". ")
+            language = (language or "English").strip()
+            templates = {
+                "Hindi": "आज हम {topics} के बारे में सीखेंगे.",
+                "Gujarati": "આજે આપણે {topics} વિશે શીખીશું.",
+            }
+            template = templates.get(language, "Today, we will learn about {topics}.")
+            return template.format(topics=topic_list)
+    @staticmethod
+    def _human_join(items: List[str]) -> str:
+            if not items:
+                return ""
+            if len(items) == 1:
+                return items[0]
+            if len(items) == 2:
+                return f"{items[0]} and {items[1]}"
+            return f"{', '.join(items[:-1])}, and {items[-1]}"
