@@ -22,14 +22,24 @@ def resolve_gcp_credentials_path(configured_path: str | None = None) -> Optional
     if configured_path:
         candidate = Path(configured_path).expanduser()
         if candidate.is_file():
+            logger.info("Using GCP credentials from configured path: %s", configured_path)
             return str(candidate.resolve())
-        logger.warning("Configured GCP credentials path %s is not a file.", configured_path)
+        logger.warning(
+            "Configured GCP credentials path %s is not a file. "
+            "Falling back to default credential detection.",
+            configured_path,
+        )
 
     backend_root = Path(__file__).resolve().parents[2]
     fallback = backend_root / DEFAULT_CREDENTIALS_FILENAME
     if fallback.is_file():
+        logger.info("Using GCP credentials from fallback path: %s", fallback)
         return str(fallback.resolve())
 
+    logger.info(
+        "No GCP credentials file found. Will use default credential detection "
+        "(e.g., GOOGLE_APPLICATION_CREDENTIALS env var or Application Default Credentials)."
+    )
     return None
 
 
@@ -120,9 +130,11 @@ class GoogleTTSService:
 
     def _build_client(self, credentials_path: Optional[str]) -> texttospeech.TextToSpeechClient:
         if credentials_path:
-            os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", credentials_path)
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
             credentials = service_account.Credentials.from_service_account_file(credentials_path)
             return texttospeech.TextToSpeechClient(credentials=credentials)
+        # Clear GOOGLE_APPLICATION_CREDENTIALS if no valid credentials path is found
+        os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
         return texttospeech.TextToSpeechClient()
 
     def _build_audio_path(self, lecture_id: str, filename: str, *, subfolder: str | None) -> Path:

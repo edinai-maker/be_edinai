@@ -22,7 +22,7 @@ from app.postgres import get_pg_cursor, get_connection
 logger = logging.getLogger(__name__)
 
 # Constants (keep same as original)
-PDF_MAX_SIZE = 15 * 1024 * 1024  # 15MB
+PDF_MAX_SIZE = 50 * 1024 * 1024  # 15MB
 DEFAULT_MIN_DURATION = 5
 DEFAULT_MAX_DURATION = 180
 MAX_ASSISTANT_SUGGESTIONS = 10

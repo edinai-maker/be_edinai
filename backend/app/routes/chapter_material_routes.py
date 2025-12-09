@@ -92,7 +92,7 @@ def get_lecture_service(db: Session = Depends(get_db)) -> LectureService:
 logger = logging.getLogger(__name__)
 
 # Local constants (kept same)
-PDF_MAX_SIZE = 15 * 1024 * 1024  # 15MB
+PDF_MAX_SIZE = 50 * 1024 * 1024  # 15MB
 DEFAULT_MIN_DURATION = 5
 DEFAULT_MAX_DURATION = 180
 MAX_ASSISTANT_SUGGESTIONS = 10
