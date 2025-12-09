@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     # Security
     secret_key: str = Field("your-secret-key-change-in-production", env="SECRET_KEY")
     algorithm: str = Field("HS256", env="ALGORITHM")
-    access_token_expire_minutes: int = Field(60, env="ACCESS_TOKEN_EXPIRE_MINUTES")
-    access_token_expire_days: int = Field(7, env="ACCESS_TOKEN_EXPIRE_DAYS")
+    access_token_expire_minutes: int = Field(525600, env="ACCESS_TOKEN_EXPIRE_MINUTES")  # 1 year (365 * 24 * 60)
+    access_token_expire_days: int = Field(365, env="ACCESS_TOKEN_EXPIRE_DAYS")  # 1 year
 
     # CORS
     cors_origins: List[str] = Field(
