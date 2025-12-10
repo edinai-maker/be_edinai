@@ -1,286 +1,139 @@
-
 """Database helpers for student roster uploads."""
-
 from __future__ import annotations
 
-
-
 import json
-
 from typing import Any, Dict, Iterable, List, Optional
-
-
 
 from ..postgres import get_pg_cursor
 
 
-
-
-
 def _table_exists(table_name: str) -> bool:
-
     query = """
-
         SELECT 1
-
         FROM information_schema.tables
-
         WHERE table_schema = 'public' AND table_name = %(table_name)s
-
         LIMIT 1
-
     """
 
-
-
     with get_pg_cursor() as cur:
-
         cur.execute(query, {"table_name": table_name})
-
         return cur.fetchone() is not None
 
 
-
-
-
 def fetch_existing_enrollments(admin_id: int, enrollments: Iterable[str]) -> List[str]:
-
     """Return enrollment numbers that already exist for the admin."""
 
-
-
     enrollment_list = list(enrollments)
-
     if not enrollment_list:
-
         return []
 
-
-
     query = (
-
         "SELECT enrollment_number FROM student_roster_entries "
-
         "WHERE admin_id = %(admin_id)s AND enrollment_number = ANY(%(enrollments)s)"
-
     )
 
-
-
     with get_pg_cursor() as cur:
-
         cur.execute(query, {"admin_id": admin_id, "enrollments": enrollment_list})
-
         rows = cur.fetchall()
-
-
 
     return [row["enrollment_number"] for row in rows]
 
 
-
-
-
 def insert_roster_entries(admin_id: int, entries: List[Dict[str, Any]]) -> None:
-
     """Insert roster entries for an admin."""
 
     if not entries:
-
         return
 
     insert_sql = (
-
         "INSERT INTO student_roster_entries "
-
         "(admin_id, enrollment_number, first_name, last_name, std, division, auto_password, assigned_member_id) "
-
         "VALUES (%(admin_id)s, %(enrollment_number)s, %(first_name)s, %(last_name)s, %(std)s, %(division)s, %(auto_password)s, %(assigned_member_id)s)"
-
     )
 
     payload = [
-
         {
-
             "admin_id": admin_id,
-
             "enrollment_number": entry["enrollment_number"],
-
             "first_name": entry["first_name"],
-
             "last_name": entry.get("last_name"),
-
             "std": entry["std"],
-
             "division": entry.get("division"),
-
             "auto_password": entry["auto_password"],
-
             "assigned_member_id": entry.get("assigned_member_id"),
-
         }
-
         for entry in entries
-
     ]
 
     with get_pg_cursor(dict_rows=False) as cur:
-
         cur.executemany(insert_sql, payload)
 
 
-
-
-
 def update_roster_entry(
-
     admin_id: int,
-
     enrollment_number: str,
-
+    *,
+    member_id: Optional[int] = None,
     **fields: Any,
-
 ) -> Optional[Dict[str, Any]]:
-
     """Update a roster entry for the admin and return the updated row."""
 
-
-
     if not fields:
-
         return None
 
-
-
     allowed_columns = {"first_name", "last_name", "std", "division", "auto_password"}
-
     invalid = set(fields.keys()) - allowed_columns
-
     if invalid:
-
         raise ValueError(f"Invalid roster columns: {', '.join(sorted(invalid))}")
 
-
-
     assignments = [f"{column} = %({column})s" for column in fields.keys()]
-
-    params = {"admin_id": admin_id, "enrollment_number": enrollment_number, **fields}
-
-
+    params: Dict[str, Any] = {"admin_id": admin_id, "enrollment_number": enrollment_number, **fields}
+    conditions = ["admin_id = %(admin_id)s", "enrollment_number = %(enrollment_number)s"]
+    if member_id is not None:
+        params["member_id"] = member_id
+        conditions.append("assigned_member_id = %(member_id)s")
 
     query = (
-
         "UPDATE student_roster_entries "
-
         f"SET {', '.join(assignments)} "
-
-        "WHERE admin_id = %(admin_id)s AND enrollment_number = %(enrollment_number)s "
-
+        "WHERE " + " AND ".join(conditions) + " "
         "RETURNING enrollment_number, first_name, last_name, std, division, auto_password, created_at"
-
     )
 
-
-
     with get_pg_cursor() as cur:
-
         cur.execute(query, params)
-
         return cur.fetchone()
 
 
-
-
-
-def update_roster_entry(
-
-    admin_id: int,
-
-    enrollment_number: str,
-
-    **fields: Any,
-
-) -> Optional[Dict[str, Any]]:
-
-    """Update a roster entry for the admin and return the updated row."""
-
-
-
-    if not fields:
-
-        return None
-
-
-
-    allowed_columns = {"first_name", "last_name", "std", "division", "auto_password"}
-
-    invalid = set(fields.keys()) - allowed_columns
-
-    if invalid:
-
-        raise ValueError(f"Invalid roster columns: {', '.join(sorted(invalid))}")
-
-
-
-    assignments = [f"{column} = %({column})s" for column in fields.keys()]
-
-    params = {"admin_id": admin_id, "enrollment_number": enrollment_number, **fields}
-
-
-
-    query = (
-
-        "UPDATE student_roster_entries "
-
-        f"SET {', '.join(assignments)} "
-
-        "WHERE admin_id = %(admin_id)s AND enrollment_number = %(enrollment_number)s "
-
-        "RETURNING enrollment_number, first_name, last_name, std, division, auto_password, created_at"
-
-    )
-
-
-
-    with get_pg_cursor() as cur:
-
-        cur.execute(query, params)
-
-        return cur.fetchone()
-
-
-
-
-
-def delete_roster_entry(admin_id: int, enrollment_number: str) -> bool:
-
+def delete_roster_entry(admin_id: int, enrollment_number: str, *, member_id: Optional[int] = None) -> bool:
     """Delete a single roster entry for the admin."""
 
-
+    conditions = ["admin_id = %(admin_id)s", "enrollment_number = %(enrollment_number)s"]
+    params: Dict[str, Any] = {"admin_id": admin_id, "enrollment_number": enrollment_number}
+    if member_id is not None:
+        params["member_id"] = member_id
+        conditions.append("assigned_member_id = %(member_id)s")
 
     query = (
+        "DELETE FROM student_roster_entries "
+        "WHERE " + " AND ".join(conditions) + " "
+        "RETURNING enrollment_number"
+    )
 
-            "DELETE FROM student_roster_entries "
-
-            "WHERE admin_id = %(admin_id)s AND enrollment_number = %(enrollment_number)s "
-
-            "RETURNING enrollment_number"
-
-        )
+    with get_pg_cursor() as cur:
+        cur.execute(query, params)
+        return cur.fetchone() is not None
 
 
-2
 def count_roster_students(admin_id: int, *, member_id: Optional[int] = None) -> int:
-
-    """Return the total number of rostered students for an admin."""
+    """Return the total number of rostered students for an admin (optionally per member)."""
 
     conditions = ["admin_id = %(admin_id)s"]
     params: Dict[str, Any] = {"admin_id": admin_id}
 
     if member_id is not None:
-        params["member_id"] = member_id
         conditions.append("assigned_member_id = %(member_id)s")
+        params["member_id"] = member_id
 
     query = (
         "SELECT COUNT(*) FROM student_roster_entries "
@@ -302,144 +155,41 @@ def fetch_roster_entries(admin_id: int, *, member_id: Optional[int] = None) -> L
         params["member_id"] = member_id
         conditions.append("assigned_member_id = %(member_id)s")
 
-    query = "SELECT COUNT(*) FROM student_roster_entries WHERE admin_id = %(admin_id)s"
-
-    with get_pg_cursor(dict_rows=False) as cur:
-
-        cur.execute(query, {"admin_id": admin_id})
-
-        (count,) = cur.fetchone()
-
-    return int(count)
-
-
-def fetch_roster_entries(admin_id: int) -> List[Dict[str, Any]]:
-    """Return stored roster entries for an admin ordered by latest."""
-
-    query = """
-
-        SELECT enrollment_number, first_name, last_name, std, division, auto_password, created_at
-
-        FROM student_roster_entries
-
-        WHERE admin_id = %(admin_id)s
-
-        ORDER BY created_at DESC
-
-    """
-    with get_pg_cursor() as cur:
-
-            cur.execute(query, {"admin_id": admin_id})
-
-            return cur.fetchall()
-
-
-
-
-
-def fetch_roster_entry_by_enrollment(admin_id: int, enrollment_number: str) -> Optional[Dict[str, Any]]:
-
-      """Return a single roster entry for the admin by enrollment number."""
-
-
-
-      query = (
-
-            "SELECT enrollment_number, first_name, last_name, std, division, auto_password, created_at "
-
-            "FROM student_roster_entries "
-
-            "WHERE admin_id = %(admin_id)s AND LOWER(enrollment_number) = LOWER(%(enrollment_number)s) "
-
-            "LIMIT 1"
-
-        )
-
-
-
-      params = {"admin_id": admin_id, "enrollment_number": enrollment_number}
-
-      with get_pg_cursor() as cur:
-
-            cur.execute(query, params)
-            return cur.fetchone()
-def count_lectures_by_member(admin_id: int) -> Dict[Optional[int], Dict[str, int]]:
-
-    """Return lecture totals grouped by assigned roster member."""
-
-
-
     query = (
-
-        "SELECT assigned_member_id, "
-
-        "       COUNT(*) FILTER (WHERE lecture_data IS NOT NULL) AS total_lectures, "
-
-        "       COUNT(*) FILTER ("
-
-        "           WHERE CAST(COALESCE(lecture_data->>'play_count', '0') AS INTEGER) > 0"
-
-        "       ) AS played_lectures, "
-
-        "       COUNT(*) FILTER ("
-
-        "           WHERE lecture_shared = TRUE"
-
-        "       ) AS shared_lectures "
-
-        "FROM lecture_gen "
-
-        "WHERE admin_id = %(admin_id)s "
-
-        "GROUP BY assigned_member_id"
-
+        "SELECT enrollment_number, first_name, last_name, std, division, auto_password, created_at "
+        "FROM student_roster_entries "
+        "WHERE " + " AND ".join(conditions) + " "
+        "ORDER BY created_at DESC"
     )
 
-
-
     with get_pg_cursor() as cur:
-
-        try:
-
-            cur.execute(query, {"admin_id": admin_id})
-
-            rows = cur.fetchall()
-
-        except Exception:
-
-            return {}
+        cur.execute(query, params)
+        return cur.fetchall()
 
 
+def fetch_roster_entry_by_enrollment(
+    admin_id: int,
+    enrollment_number: str,
+    *,
+    member_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return a single roster entry for the admin by enrollment number."""
 
-    results: Dict[Optional[int], Dict[str, int]] = {}
+    conditions = ["admin_id = %(admin_id)s", "LOWER(enrollment_number) = LOWER(%(enrollment_number)s)"]
+    params: Dict[str, Any] = {"admin_id": admin_id, "enrollment_number": enrollment_number}
+    if member_id is not None:
+        params["member_id"] = member_id
+        conditions.append("assigned_member_id = %(member_id)s")
 
-    for row in rows:
-
-        member_id = row.get("assigned_member_id")
-
-        total = int(row.get("total_lectures") or 0)
-
-        played = int(row.get("played_lectures") or 0)
-
-        shared = int(row.get("shared_lectures") or 0)
-
-        pending = max(total - played, 0)
-
-        results[member_id] = {
-
-            "total_lectures": total,
-
-            "played_lectures": played,
-
-            "shared_lectures": shared,
-
-            "pending_lectures": pending,
-
-        }
-
-
-
-    return results
+    query = (
+        "SELECT enrollment_number, first_name, last_name, std, division, auto_password, created_at "
+        "FROM student_roster_entries "
+        "WHERE " + " AND ".join(conditions) + " "
+        "LIMIT 1"
+    )
+    with get_pg_cursor() as cur:
+        cur.execute(query, params)
+        return cur.fetchone()
 
 
 def fetch_student_profiles(
@@ -595,37 +345,43 @@ def fetch_class_subjects(
 
     if not class_filter:
         return []
-        
 
-    query = """
-
-        SELECT DISTINCT subject
-
-        FROM chapter_materials
-
-        WHERE admin_id = %(admin_id)s
+    base_condition = """
+        admin_id = %(admin_id)s
           AND TRIM(subject) <> ''
           AND subject IS NOT NULL
           AND (
                 std = %(class_filter)s
              OR LOWER(TRIM(std)) = LOWER(TRIM(%(class_filter)s))
              OR LOWER(std) LIKE LOWER(%(class_like)s)
-             ORDER BY subject
           )
-          ORDER BY subject
     """
 
-    params = {
-
+    params: Dict[str, Any] = {
         "admin_id": admin_id,
-
         "class_filter": class_filter,
-
         "class_like": f"%{class_filter}%",
-
     }
 
-    
+    member_clause = ""
+    if member_id is not None:
+        params["member_id"] = member_id
+        member_clause = """
+          AND EXISTS (
+                SELECT 1
+                FROM student_roster_entries sre
+                WHERE sre.admin_id = chapter_materials.admin_id
+                  AND sre.std = chapter_materials.std
+                  AND sre.assigned_member_id = %(member_id)s
+            )
+        """
+
+    query = (
+        "SELECT DISTINCT subject "
+        "FROM chapter_materials "
+        "WHERE " + base_condition + member_clause +
+        " ORDER BY subject"
+    )
 
     with get_pg_cursor() as cur:
         cur.execute(query, params)
@@ -634,11 +390,15 @@ def fetch_class_subjects(
     return [row["subject"] for row in rows]
 
 
-def fetch_class_division_filters(admin_id: int, *, class_filter: Optional[str] = None, member_id: Optional[int] = None) -> Dict[str, List[str]]:
+def fetch_class_division_filters(
+    admin_id: int,
+    *,
+    class_filter: Optional[str] = None,
+    member_id: Optional[int] = None,
+) -> Dict[str, List[str]]:
     """Return distinct standards (classes) and divisions for the admin.
 
     When a class_filter is provided, divisions are restricted to that class.
-    When member_id is provided, results are filtered to that assigned member.
     """
 
     class_conditions = ["admin_id = %(admin_id)s", "TRIM(COALESCE(std, '')) <> ''"]
