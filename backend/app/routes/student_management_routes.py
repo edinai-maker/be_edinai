@@ -729,6 +729,7 @@ async def list_student_profiles(
         admin_id,
         class_filter=resolved_class,
         division_filter=resolved_division,
+        member_id=current_user["id"]
     )
     return ResponseBase(status=True, message="Student profiles fetched successfully", data={"students": students})
 
@@ -761,6 +762,7 @@ async def list_class_subjects(
         admin_id,
         class_filter=resolved_class,
         division_filter=resolved_division,
+        member_id=current_user["id"]
     )
     return ResponseBase(status=True, message="Subjects fetched successfully", data={"subjects": subjects})
 
@@ -782,5 +784,6 @@ async def list_class_subjects(
         admin_id,
         class_filter=resolved_class,
         division_filter=resolved_division,
+        member_id=current_user["id"]
     )
     return ResponseBase(status=True, message="Subjects fetched successfully", data={"subjects": subjects})
