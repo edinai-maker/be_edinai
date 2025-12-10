@@ -367,10 +367,6 @@ def detect_dominant_language(text: str) -> Optional[str]:
 
 
 def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
-    """
-    Run OCRmyPDF once and return the sidecar text if available.
-    Tuned for speed: optimize=0, no multiple passes.
-    """
     if ocrmypdf is None:
         raise RuntimeError("ocrmypdf is required. Install it with 'pip install ocrmypdf'.")
 
@@ -386,10 +382,10 @@ def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
                 sidecar=str(sidecar_text),
                 force_ocr=True,
                 language=ocr_language,
-                progress_bar=False,
+                progress_bar=False,  # progress bar / extra output band
                 rotate_pages=True,
                 deskew=True,
-                optimize=0,  # ⚡ speed: heavy optimization band
+                # oversample=300,  # OPTIONAL: DPI normalize karne ke liye, chaho to uncomment karo
             )
         except OCRMissingDependencyError as exc:
             raise RuntimeError(
@@ -422,15 +418,9 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
     """
     Prefer embedded PDF text first (fast + clean),
     and only fall back to OCR when needed.
-
-    ⚡ Optimized:
-    - OCRmyPDF sirf *ek baar* run hota hai.
-    - Pehle language guess karte hain, par multiple language loops nahi.
     """
 
-    pdf_path = Path(pdf_path)
-
-    # 1) Try normal text extraction first
+    # 1) Try normal text extraction first (jaise local me ho raha tha)
     try:
         raw_text = read_pdf(pdf_path)
     except Exception as exc:
@@ -443,55 +433,90 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
         return raw_text, detected_language
 
     logger.info(
-        "Embedded text empty for %s; falling back to OCR with ocrmypdf (single pass).",
+        "Embedded text empty for %s; falling back to OCR with ocrmypdf.",
         pdf_path.name,
     )
 
-    # 2) Decide which OCR language(s) to use
+    # 2) Agar embedded text nahi mila, tab hi OCR use karo
+    def _run_ocr(lang_code: str) -> str:
+        try:
+            # map internal lang code -> tesseract code
+            lang_map = {
+                "eng": "eng",
+                "hin": "hin",
+                "guj": "guj",
+            }
+            ocr_language = lang_map.get(lang_code, "eng+hin+guj")
+            return read_pdf_with_ocrmypdf(pdf_path, ocr_language=ocr_language)
+        except RuntimeError as exc:  # ocrmypdf / deps issue
+            logger.warning("OCR failed for %s using %s: %s", pdf_path.name, lang_code, exc)
+            return ""
+
     detected_osd_language = detect_ocr_language_with_pytesseract(pdf_path)
+    candidate_order: List[str] = []
+    if detected_osd_language:
+        candidate_order.append(detected_osd_language)
+
     default_language = _select_supported_language(DEFAULT_OCR_LANGUAGE)
+    if default_language and default_language not in candidate_order:
+        candidate_order.append(default_language)
 
-    internal_code: Optional[str] = detected_osd_language or default_language
+    for code in LANGUAGE_SPECS.keys():
+        if code not in candidate_order:
+            candidate_order.append(code)
 
-    lang_map = {
-        "eng": "eng",
-        "hin": "hin",
-        "guj": "guj",
-    }
+    ocr_text = ""
+    ocr_language_used: Optional[str] = None
+    best_attempt_text = ""
+    best_attempt_language: Optional[str] = None
+    best_attempt_ratio = 0.0
 
-    if internal_code in lang_map:
-        ocr_language = lang_map[internal_code]
-        logger.info(
-            "Running OCRmyPDF for %s using single language model: %s",
-            pdf_path.name,
-            ocr_language,
-        )
-    else:
-        ocr_language = "+".join(lang_map.values())  # "eng+hin+guj"
-        logger.info(
-            "No strong language guess for %s; running OCRmyPDF with combined languages: %s",
-            pdf_path.name,
-            ocr_language,
-        )
+    for candidate in candidate_order:
+        attempt = _run_ocr(candidate)
+        if not attempt.strip():
+            continue
 
-    # 3) Single OCR pass
-    try:
-        ocr_text = read_pdf_with_ocrmypdf(pdf_path, ocr_language=ocr_language)
-    except RuntimeError as exc:
-        logger.warning("OCR failed for %s: %s", pdf_path.name, exc)
-        return "", None
+        spec = LANGUAGE_SPECS.get(candidate)
+        ratio = 0.0
+        if spec:
+            ratio = _script_ratio(attempt, pattern=spec["script_pattern"])
+            if ratio < float(spec["min_ratio"]):
+                if ratio > best_attempt_ratio:
+                    best_attempt_text = attempt
+                    best_attempt_language = candidate
+                    best_attempt_ratio = ratio
+                logger.info(
+                    "OCR text for %s using %s model did not meet required script ratio (%.2f < %.2f); trying next candidate.",
+                    pdf_path.name,
+                    candidate,
+                    ratio,
+                    float(spec["min_ratio"]),
+                )
+                continue
+
+        ocr_text = attempt
+        ocr_language_used = candidate
+        break
+
+    if not ocr_text.strip() and best_attempt_text.strip():
+        ocr_text = best_attempt_text
+        ocr_language_used = best_attempt_language
 
     if not ocr_text.strip():
-        logger.info("OCR did not produce text for %s; returning empty.", pdf_path.name)
+        logger.info("OCR attempts did not produce text for %s; returning empty.", pdf_path.name)
         return "", None
 
-    # 4) Detect language from OCR text (no more OCR runs)
     detected_language = detect_dominant_language(ocr_text)
-    logger.info("Final detected language (after OCR) for %s: %s", pdf_path.name, detected_language)
+    logger.info("Final Detected Language (after OCR): %s", detected_language)
 
-    final_language = detected_language or internal_code
+    if detected_language and detected_language != ocr_language_used:
+        refined = _run_ocr(detected_language)
+        if refined.strip():
+            ocr_text = refined
+            ocr_language_used = detected_language
+
+    final_language = detected_language or ocr_language_used
     return ocr_text, final_language
-
 
     
 def detect_pdf_language(pdf_path: Path) -> Dict[str, str]:
