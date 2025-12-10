@@ -634,10 +634,11 @@ def fetch_class_subjects(
     return [row["subject"] for row in rows]
 
 
-def fetch_class_division_filters(admin_id: int, *, class_filter: Optional[str] = None) -> Dict[str, List[str]]:
+def fetch_class_division_filters(admin_id: int, *, class_filter: Optional[str] = None, member_id: Optional[int] = None) -> Dict[str, List[str]]:
     """Return distinct standards (classes) and divisions for the admin.
 
     When a class_filter is provided, divisions are restricted to that class.
+    When member_id is provided, results are filtered to that assigned member.
     """
 
     class_conditions = ["admin_id = %(admin_id)s", "TRIM(COALESCE(std, '')) <> ''"]
