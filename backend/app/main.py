@@ -44,6 +44,8 @@ def create_app() -> FastAPI:
         "https://staticfile-shubhamc080.wasmer.app/",
         "https://edinai.inaiverse.com",
         "https://api.edinai.inaiverse.com",
+        "https://xlhyimcoyqyp.id.wasmer.app/",
+      
     ]
 
     cors_origins = ["*"] if allow_all_origins else default_allowed_origins
