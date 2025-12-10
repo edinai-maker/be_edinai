@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..schemas import ResponseBase, WorkType
 from ..services import dashboard_service
-from ..utils.dependencies import member_required, admin_required
+from ..utils.dependencies import member_required, admin_required, onboarding_completed_required
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
