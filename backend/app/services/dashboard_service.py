@@ -566,16 +566,14 @@ def get_member_dashboard(*, member_id: int, admin_id: int, work_type: str) -> Di
         }
     elif work_type == "student":
         total_chapters = dashboard_repository.count_members(admin_id, work_type="chapter", active_only=True)
-        
-        total_lectures = dashboard_repository.count_total_lectures(admin_id) 
-
-        # total_lectures = dashboard_repository.count_admin_lectures(admin_id)         
-        total_students = roster_repository.count_roster_students(admin_id)
+        total_lectures = 0  # Student dashboard must mirror legacy SM API (static lecture counts)
+        total_students = roster_repository.count_roster_students(admin_id, member_id=member_id)
         payload = {
             "student_metrics": {
                 "total_chapters": total_chapters,
                 "total_lectures": total_lectures,
                 "total_students": total_students,
+                "total_paid": 0,
                 "progress": {
                     "completed_lectures": 0,
                     "total_available_lectures": total_lectures,
@@ -612,91 +610,48 @@ def get_member_dashboard(*, member_id: int, admin_id: int, work_type: str) -> Di
     }
 
 def get_student_management_dashboard(admin_id: int) -> Dict[str, object]:
-
     """Return condensed student management metrics for the admin portal dashboard."""
 
-
-
     total_rostered_students = roster_repository.count_roster_students(admin_id)
-
     student_members = member_repository.list_members(admin_id, work_type="student", active_only=True)
-
     if not student_members:
-
         student_members = member_repository.list_members(admin_id, work_type="student", active_only=False)
-
-
 
     reference_member = student_members[0] if student_members else None
 
-
-
     admin = dashboard_repository.fetch_admin(admin_id)
-
     package = (
-
         dashboard_repository.fetch_package(admin.get("package"))
-
         if admin and admin.get("package")
-
         else None
-
     )
-
-
 
     total_chapters = dashboard_repository.count_members(admin_id, work_type="chapter", active_only=True)
-
-    total_lectures = dashboard_repository.count_total_lectures(admin_id)
-
-
+    total_lectures = 0  # Student-management dashboard shows static lecture counts per legacy API
 
     last_activity = (
-
         reference_member["last_login"].isoformat()
-
         if reference_member and reference_member.get("last_login")
-
         else None
-
     )
 
-
-
     student_metrics = {
-
         "total_chapters": total_chapters,
-
         "total_lectures": total_lectures,
-
         "total_students": total_rostered_students,
-
         "total_paid": 0,
-
         "progress": {
-
             "completed_lectures": 0,
-
             "total_available_lectures": total_lectures,
-
             "progress_percentage": 0,
-
             "last_activity": last_activity,
-
         },
-
     }
 
-
-
     return {
-
         "package_info": _serialize_package(package),
-
         "work_type": "student",
-
         "student_metrics": student_metrics,
-
     }
 def get_summary(admin_id: int) -> Dict[str, object]:
     summary = dashboard_repository.dashboard_summary(admin_id)
