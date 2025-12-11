@@ -4,9 +4,13 @@ Handles HTTP requests for lecture operations
 """
 import os
 from dotenv import load_dotenv
+import json
+import copy
+import mimetypes
+import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, status, Depends, Query
+from fastapi import APIRouter, HTTPException, status, Depends, Query, File, UploadFile , Form
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
@@ -24,11 +28,16 @@ from app.schemas.lecture_schema import (
     GenerationStatus,
 )
 from app.repository.lecture_repository import LectureRepository
+from app.repository import student_portal_video_repository
 from app.services.lecture_generation_service import GroqService
 from app.services.lecture_share_service import LectureShareService
 from app.schemas.admin_schema import WorkType
 from app.utils.dependencies import admin_or_lecture_member, get_current_user, member_required
+from app.utils.file_handler import save_uploaded_file
+from app.postgres import get_pg_cursor
 from app.database import get_db
+from app.config import get_settings
+from app.utils.s3_file_handler import get_s3_service
 load_dotenv()
 
 # ============================================================================
@@ -187,6 +196,281 @@ async def share_lecture(
     )
     return LectureShareResponse(**result)
 
+@router.post(
+    "/{lecture_id}/share-recording",
+    status_code=status.HTTP_200_OK,
+    summary="Upload a recorded lecture video and share it with students via the student portal",
+)
+async def share_lecture_recording(
+    lecture_id: str,
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(member_required(WorkType.LECTURE)),
+    share_service: LectureShareService = Depends(get_share_service),
+) -> Dict[str, Any]:
+    """Upload a screen recording for a lecture and register it as a student portal video.
+
+    The recording is stored on disk and a corresponding entry is created in
+    the ``student_portal_videos`` table so that students of the lecture's
+    standard (derived from metadata when available) can see it on their
+    portal dashboard.
+    """
+
+    # Resolve lecture metadata and admin context from DB
+    with get_pg_cursor() as cur:
+        cur.execute(
+            "SELECT admin_id, lecture_title, subject, std, lecture_data FROM lecture_gen WHERE lecture_uid = %(lecture_uid)s",
+            {"lecture_uid": lecture_id},
+        )
+        lecture_row = cur.fetchone()
+
+    if not lecture_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Lecture not found",
+        )
+
+    admin_id = lecture_row.get("admin_id")
+    if not admin_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to determine school context for lecture",
+        )
+
+    title = (lecture_row.get("lecture_title") or f"Lecture {lecture_id}").strip() or f"Lecture {lecture_id}"
+    chapter_name = (lecture_row.get("chapter_title") or title)
+
+    lecture_payload_raw = lecture_row.get("lecture_data") or {}
+    if isinstance(lecture_payload_raw, str):
+        try:
+            lecture_payload = json.loads(lecture_payload_raw)
+        except Exception:
+            lecture_payload = {}
+    else:
+        lecture_payload = lecture_payload_raw if isinstance(lecture_payload_raw, dict) else {}
+
+    lecture_record = copy.deepcopy(lecture_payload) if isinstance(lecture_payload, dict) else {}
+    if not isinstance(lecture_record, dict):
+        lecture_record = {}
+
+    lecture_record.setdefault("lecture_id", lecture_id)
+    metadata = lecture_record.get("metadata")
+    if metadata is None:
+        metadata = {}
+        lecture_record["metadata"] = metadata
+
+    if lecture_row.get("subject"):
+        lecture_record.setdefault("subject", lecture_row.get("subject"))
+        metadata.setdefault("subject", lecture_row.get("subject"))
+    if lecture_row.get("std"):
+        metadata.setdefault("std", lecture_row.get("std"))
+    if lecture_row.get("sem"):
+        metadata.setdefault("sem", lecture_row.get("sem"))
+    if lecture_row.get("board"):
+        metadata.setdefault("board", lecture_row.get("board"))
+
+    resolved_subject = share_service._resolve_subject(
+        request_subject=None,
+        row=lecture_row,
+        record=lecture_record,
+    )
+    resolved_std = share_service._resolve_std(
+        request_std="",
+        row_std=lecture_row.get("std"),
+        record=lecture_record,
+    )
+
+    subject_candidate = resolved_subject or lecture_row.get("subject") or metadata.get("subject")
+    subject = subject_candidate.strip() if isinstance(subject_candidate, str) and subject_candidate.strip() else None
+
+    def _extract_display_std(container: Dict[str, Any]) -> Optional[str]:
+        candidate_keys = (
+            "std_name",
+            "standard_name",
+            "standard",
+            "class_name",
+            "class_title",
+            "class_label",
+            "class",
+            "grade_name",
+            "grade",
+            "grade_title",
+            "std_title",
+            "display_std",
+        )
+        for key in candidate_keys:
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for value in container.values():
+            if isinstance(value, dict):
+                nested = _extract_display_std(value)
+                if nested:
+                    return nested
+        return None
+
+    std_candidate = _extract_display_std(metadata) or _extract_display_std(lecture_record)
+    if not std_candidate and isinstance(resolved_std, str) and resolved_std.strip():
+        std_candidate = resolved_std.strip()
+    if not std_candidate:
+        std_candidate = lecture_row.get("std") if isinstance(lecture_row.get("std"), str) else None
+    std_value = std_candidate.strip() if isinstance(std_candidate, str) and std_candidate.strip() else None
+
+    duration_seconds: Optional[int] = None
+    duration_value = (
+        lecture_record.get("estimated_duration")
+        if isinstance(lecture_record, dict)
+        else None
+    ) or (
+        lecture_record.get("requested_duration")
+        if isinstance(lecture_record, dict)
+        else None
+    )
+
+    if duration_value is not None:
+        try:
+            duration_seconds = int(float(duration_value) * 60)
+        except (ValueError, TypeError):
+            try:
+                duration_seconds = int(duration_value)
+            except (ValueError, TypeError):
+                duration_seconds = None
+
+    thumbnail_url: Optional[str] = None
+    thumbnail_candidates: List[Optional[str]] = []
+
+    if isinstance(metadata, dict):
+        thumbnail_candidates.extend(
+            [
+                metadata.get("thumbnail_url"),
+                metadata.get("thumbnail"),
+                metadata.get("cover_image"),
+                metadata.get("cover"),
+                metadata.get("poster"),
+            ]
+        )
+
+    if isinstance(lecture_record, dict):
+        thumbnail_candidates.extend(
+            [
+                lecture_record.get("thumbnail_url"),
+                lecture_record.get("thumbnail"),
+                lecture_record.get("cover_image"),
+            ]
+        )
+
+        slides = lecture_record.get("slides")
+        if isinstance(slides, list):
+            for slide in slides:
+                if not isinstance(slide, dict):
+                    continue
+                image_candidate = (
+                    slide.get("image")
+                    or slide.get("image_url")
+                    or slide.get("thumbnail")
+                    or slide.get("thumbnail_url")
+                )
+                if image_candidate:
+                    thumbnail_candidates.append(image_candidate)
+                    break
+
+    for candidate in thumbnail_candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            thumbnail_url = candidate.strip()
+            break
+
+    settings = get_settings()
+    if not thumbnail_url:
+        thumbnail_url = (
+            getattr(settings, "default_lecture_thumbnail", None)
+            or settings.dict().get("default_lecture_thumbnail")
+            or "/static/images/lecture-placeholder.png"
+        )
+
+    # Persist uploaded recording to local storage
+    saved = await save_uploaded_file(
+        file,
+        "videos",
+        allowed_extensions={".mp4", ".mov", ".mkv", ".webm"},
+        allowed_types={
+            "video/mp4",
+            "video/x-m4v",
+            "video/quicktime",
+            "video/webm",
+            "video/x-matroska",
+            "application/octet-stream",
+        },
+        max_size=500 * 1024 * 1024,
+    )
+
+    video_url_value = saved["file_path"]
+    thumbnail_url_value = thumbnail_url
+
+    s3_service = None
+    if settings.s3_enabled and settings.aws_s3_bucket_name:
+        try:
+            s3_service = get_s3_service(settings)
+        except Exception as exc:  # pragma: no cover - S3 init
+            logger.warning("Unable to initialize S3 service for lecture recordings: %s", exc)
+            s3_service = None
+
+    if s3_service:
+        abs_video_path = os.path.abspath(saved["file_path"])
+        if os.path.exists(abs_video_path):
+            try:
+                video_content_type = (
+                    file.content_type
+                    or mimetypes.guess_type(abs_video_path)[0]
+                    or "video/mp4"
+                )
+                upload_result = s3_service.upload_file_from_path(
+                    file_path=abs_video_path,
+                    folder=f"lectures/{admin_id}/{lecture_id}",
+                    content_type=video_content_type,
+                    public=True,
+                )
+                video_url_value = upload_result.get("s3_url", video_url_value)
+            except Exception as exc:  # pragma: no cover - S3 upload
+                logger.warning("Failed to upload lecture recording to S3: %s", exc)
+
+        if thumbnail_url and not str(thumbnail_url).lower().startswith(("http://", "https://", "s3://")):
+            candidate_path = thumbnail_url
+            if candidate_path.startswith("./"):
+                candidate_path = candidate_path[2:]
+            abs_thumb_path = os.path.abspath(candidate_path)
+            if os.path.exists(abs_thumb_path):
+                try:
+                    thumb_content_type = mimetypes.guess_type(abs_thumb_path)[0] or "image/jpeg"
+                    thumb_result = s3_service.upload_file_from_path(
+                        file_path=abs_thumb_path,
+                        folder=f"lectures/{admin_id}/{lecture_id}/thumbnails",
+                        content_type=thumb_content_type,
+                        public=True,
+                    )
+                    thumbnail_url_value = thumb_result.get("s3_url", thumbnail_url_value)
+                except Exception as exc:  # pragma: no cover - S3 upload
+                    logger.warning("Failed to upload lecture thumbnail to S3: %s", exc)
+
+    video_record = student_portal_video_repository.create_video(
+        admin_id=admin_id,
+        std=std_value,
+        subject=subject,
+        title=title,
+        description=f"Recorded lecture: {title}",
+        chapter_name=chapter_name,
+        duration_seconds=duration_seconds,
+        video_url=video_url_value,
+        thumbnail_url=thumbnail_url_value,
+    )
+
+    return {
+        "status": True,
+        "message": "Recording uploaded and shared to student portal successfully",
+        "data": {
+            "lecture_id": lecture_id,
+            "std": std_value,
+            "video": video_record,
+        },
+    }
 
 @router.get(
     "/shared",

@@ -313,6 +313,7 @@ def get_student_roster_context(enrollment_number: str) -> Optional[Dict[str, Any
             r.first_name AS roster_first_name,
             r.last_name AS roster_last_name,
             p.first_name AS profile_first_name,
+            p.class_stream AS profile_class_stream,
             p.division AS profile_division,
             p.photo_path
         FROM student_roster_entries r

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from ..postgres import get_pg_cursor
@@ -125,6 +126,70 @@ def create_video(
         cur.execute(query, payload)
         return _row_to_video(cur.fetchone())  # type: ignore[arg-type]
 
+def _normalize_url_for_match(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    text = str(value).strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    text = text.lstrip("/")
+    return text.lower()
+
+
+def delete_videos_by_identifiers(
+    *,
+    admin_id: int,
+    canonical_urls: Iterable[str],
+    filenames: Iterable[str],
+) -> int:
+    canonical_set = {
+        _normalize_url_for_match(url)
+        for url in canonical_urls
+        if isinstance(url, str) and url.strip()
+    }
+    filename_set = {
+        Path(name).name.lower()
+        for name in filenames
+        if isinstance(name, str) and name.strip()
+    }
+
+    if not canonical_set and not filename_set:
+        return 0
+
+    with get_pg_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, video_url
+            FROM student_portal_videos
+            WHERE admin_id = %(admin_id)s
+            """,
+            {"admin_id": admin_id},
+        )
+        rows = cur.fetchall()
+
+    ids_to_delete: List[int] = []
+    for row in rows:
+        video_id = row.get("id")
+        video_url = row.get("video_url")
+        normalized_url = _normalize_url_for_match(video_url)
+        filename = Path(str(video_url or "")).name.lower()
+
+        if normalized_url in canonical_set or filename in filename_set:
+            if isinstance(video_id, int):
+                ids_to_delete.append(video_id)
+
+    if not ids_to_delete:
+        return 0
+
+    with get_pg_cursor(dict_rows=False) as cur:
+        cur.execute(
+            """
+            DELETE FROM student_portal_videos
+            WHERE id = ANY(%(ids)s)
+            """,
+            {"ids": ids_to_delete},
+        )
+        return cur.rowcount or 0
 
 def ensure_sample_videos(admin_id: int, std: Optional[str], samples: Iterable[Dict[str, Any]]) -> None:
     params: Dict[str, Any] = {"admin_id": admin_id}
@@ -229,8 +294,12 @@ def get_video_with_engagement(
 
     std_clause = ""
     if std:
-        params["std"] = std
-        std_clause = " AND (v.std = %(std)s OR v.std IS NULL)"
+        # params["std"] = std
+        # std_clause = " AND (v.std = %(std)s OR v.std IS NULL)"
+        normalized_std = std.strip()
+        params["std"] = normalized_std
+        params["std_like"] = f"%{normalized_std}%"
+        std_clause = " AND (v.std = %(std)s OR v.std LIKE %(std_like)s OR v.std IS NULL)"
 
     query = f"""
         SELECT
@@ -284,8 +353,12 @@ def list_videos_for_student(
 
     std_clause = ""
     if std:
-        params["std"] = std
-        std_clause = " AND (v.std = %(std)s OR v.std IS NULL)"
+        # params["std"] = std
+        # std_clause = " AND (v.std = %(std)s OR v.std IS NULL)"
+        normalized_std = std.strip()
+        params["std"] = normalized_std
+        params["std_like"] = f"%{normalized_std}%"
+        std_clause = " AND (v.std = %(std)s OR v.std LIKE %(std_like)s OR v.std IS NULL)"
 
     query = f"""
         SELECT
@@ -493,16 +566,17 @@ def list_watched_videos(
     query = f"""
         SELECT
             v.*,
-            e.watch_duration_seconds,
-            e.liked,
-            e.subscribed,
-            e.last_watched_at
+            e.watch_duration_seconds AS user_watch_duration_seconds,
+            e.liked AS user_liked,
+            e.subscribed AS user_subscribed,
+            e.last_watched_at AS user_last_watched_at
         FROM student_portal_video_engagement e
         JOIN student_portal_videos v ON v.id = e.video_id
         WHERE e.enrollment_number = %(enrollment)s
           AND v.admin_id = %(admin_id)s
           {std_clause}
         ORDER BY e.last_watched_at DESC NULLS LAST
+        {limit_clause}
     """
 
     with get_pg_cursor() as cur:
@@ -514,16 +588,20 @@ def list_watched_videos(
         base = _row_to_video(row)
         if base is None:
             continue
+        user_watch_seconds = row.get("user_watch_duration_seconds", 0) or 0
+        user_last_watched = row.get("user_last_watched_at")
+        user_liked = row.get("user_liked", False)
+        user_subscribed = row.get("user_subscribed", False)
         base.update(
             {
-                "watch_duration_seconds": row.get("watch_duration_seconds", 0),
-                "liked": row.get("liked", False),
-                "subscribed": row.get("subscribed", False),
-                "last_watched_at": row.get("last_watched_at"),
-                # "user_liked": row.get("liked", False),
-                # "user_subscribed": row.get("subscribed", False),
-                # "user_watch_duration_seconds": row.get("watch_duration_seconds", 0),
-                # "user_last_watched_at": row.get("last_watched_at"),
+                "watch_duration_seconds": user_watch_seconds,
+                "last_watched_at": user_last_watched,
+                "liked": user_liked,
+                "subscribed": user_subscribed,
+                "user_watch_duration_seconds": user_watch_seconds,
+                "user_last_watched_at": user_last_watched,
+                "user_liked": user_liked,
+                "user_subscribed": user_subscribed,
             }
         )
         items.append(base)

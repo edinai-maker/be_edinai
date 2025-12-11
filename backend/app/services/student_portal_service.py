@@ -1,8 +1,12 @@
 """Business logic for the student portal module."""
 from __future__ import annotations
 
+from ast import Import
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from pathlib import Path
+
+import re
+from typing import Any, Dict, List, Tuple, Optional, Union
 
 from fastapi import HTTPException, UploadFile, status
 
@@ -25,54 +29,24 @@ CHAT_ATTACHMENT_SUBDIR = "chat_attachments"
 VIDEOS_SUBDIR = "videos"
 
 
-DEFAULT_VIDEO_SAMPLES: List[Dict[str, Any]] = [
-    {
-        "subject": "Mathematics",
-        "title": "Introduction to Electric Charges",
-        "description": "Chapter 1 · Electric Charges and Fields",
-        "chapter_name": "NCERT Physics Part 1",
-        "duration_seconds": 930,
-        # "video_url": "https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4",
-        "video_url": "D:/finalcode/EDinai-Backend/backend/uploads/videos/2d0dbcda-d44d-4d29-ac06-f39bb4f06e12.webm",
-        "thumbnail_url": "https://images.unsplash.com/photo-1509228468518-180dd4864904?auto=format&fit=crop&w=1200&q=80",
-    },
-    {
-        "subject": "Physics",
-        "title": "Electrostatic Potential",
-        "description": "Level up your understanding of electric fields",
-        "chapter_name": "NCERT Physics Part 1",
-        "duration_seconds": 780,
-        "video_url": "D:/finalcode/EDinai-Backend/backend/uploads/videos/488b3812-7b93-4dd5-92d6-292cb8d0f8f2.webm",
-        "thumbnail_url": "https://images.unsplash.com/photo-1761839257845-9283b7d1b933?q=80&w=1470&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D",
-    },
-    {
-        "subject": "Chemistry",
-        "title": "Carbon Compounds Essentials",
-        "description": "Master the basics of organic chemistry nomenclature",
-        "chapter_name": "NCERT Chemistry Part 2",
-        "duration_seconds": 840,
-        "video_url": "D:/finalcode/EDinai-Backend/backend/uploads/videos/46205a31-8a72-44fb-9b4d-bd7d90f6740a.webm",
-        "thumbnail_url": "https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=1200&q=80",
-    },
-    {
-        "subject": "Biology",
-        "title": "Cell Structure Overview",
-        "description": "Interactive walkthrough of cell organelles",
-        "chapter_name": "NCERT Biology",
-        "duration_seconds": 810,
-        "video_url": "D:/finalcode/EDinai-Backend/backend/uploads/videos/d85f4eae-2e09-4717-a6b3-3694650f41fe.webm",
-        "thumbnail_url": "https://images.unsplash.com/photo-1535930749574-1399327ce78f?auto=format&fit=crop&w=1200&q=80",
-    },
-    {
-        "subject": "Mathematics",
-        "title": "Integration by Parts",
-        "description": "Practice walkthrough with solved examples",
-        "chapter_name": "NCERT Mathematics Part 2",
-        "duration_seconds": 900,
-        "video_url": "D:/finalcode/EDinai-Backend/backend/uploads/videos/dc31b9be-dbfa-486f-8e67-9048e310904c.mp4",
-        "thumbnail_url": "https://images.unsplash.com/photo-1523475472560-d2df97ec485c?auto=format&fit=crop&w=1200&q=80",
-    },
-]
+DEFAULT_VIDEO_SAMPLES: List[Dict[str, Any]] = []
+
+LEGACY_SAMPLE_VIDEO_URLS: Tuple[str, ...] = (
+    # "D:/finalcode/EDinai-Backend/backend/uploads/videos/2d0dbcda-d44d-4d29-ac06-f39bb4f06e12.webm",
+    # "D:/finalcode/EDinai-Backend/backend/uploads/videos/488b3812-7b93-4dd5-92d6-292cb8d0f8f2.webm",
+    # "D:/finalcode/EDinai-Backend/backend/uploads/videos/46205a31-8a72-44fb-9b4d-bd7d90f6740a.webm",
+    # "D:/finalcode/EDinai-Backend/backend/uploads/videos/d85f4eae-2e09-4717-a6b3-3694650f41fe.webm",
+    # "D:/finalcode/EDinai-Backend/backend/uploads/videos/dc31b9be-dbfa-486f-8e67-9048e310904c.mp4",
+)
+
+
+def _normalize_legacy_url(value: str) -> str:
+    normalized = value.replace("\\", "/").lstrip("/")
+    return normalized.lower()
+
+
+LEGACY_SAMPLE_VIDEO_URL_SET = {_normalize_legacy_url(item) for item in LEGACY_SAMPLE_VIDEO_URLS}
+LEGACY_SAMPLE_FILENAMES: Tuple[str, ...] = tuple(Path(item).name.lower() for item in LEGACY_SAMPLE_VIDEO_URLS)
 
 
 def _resolve_media_url(value: Optional[str]) -> Optional[str]:
@@ -140,6 +114,24 @@ def _prepare_video_payload(video: Dict[str, Any]) -> Dict[str, Any]:
     prepared["video_url"] = _resolve_media_url(prepared.get("video_url"))
     return prepared
 
+def _is_legacy_video_url(value: Optional[str]) -> bool:
+    if not value:
+        return False
+
+    text = str(value).strip()
+    if not text:
+        return False
+
+    normalized = text.replace("\\", "/")
+    canonical = normalized.lstrip("/").lower()
+    if canonical in LEGACY_SAMPLE_VIDEO_URL_SET:
+        return True
+
+    filename = Path(value).name.lower()
+    if filename in LEGACY_SAMPLE_FILENAMES:
+        return True
+
+    return False
 
 async def upload_static_video(
     *,
@@ -402,6 +394,10 @@ def get_roster_context(enrollment_number: str) -> Dict[str, Optional[str]]:
     if context is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student is not in roster")
 
+    profile_std = (context.get("profile_class_stream") or "").strip()
+    roster_std = (context.get("std") or "").strip()
+    normalized_std = roster_std or profile_std
+
     division = context.get("profile_division") or context.get("division")
     first_name = context.get("profile_first_name") or context.get("roster_first_name") or ""
     last_name = context.get("profile_last_name") or context.get("roster_last_name") or ""
@@ -409,7 +405,8 @@ def get_roster_context(enrollment_number: str) -> Dict[str, Optional[str]]:
     return {
         "admin_id": context["admin_id"],
         "enrollment_number": context["enrollment_number"],
-        "std": context["std"],
+        # "std": context["std"],
+        "std": normalized_std or None,
         "division": division,
         "first_name": first_name.strip(),
         "last_name": last_name.strip(),
@@ -579,6 +576,14 @@ def list_books_for_student(
 def ensure_dashboard_videos(current_context: Dict[str, Optional[str]]) -> None:
     admin_id = current_context["admin_id"]
     std = current_context.get("std")
+    if LEGACY_SAMPLE_VIDEO_URLS:
+        student_portal_video_repository.delete_videos_by_identifiers(
+            admin_id=admin_id,
+            canonical_urls=LEGACY_SAMPLE_VIDEO_URLS,
+            filenames=LEGACY_SAMPLE_FILENAMES,
+        )
+    if not DEFAULT_VIDEO_SAMPLES:
+        return
     student_portal_video_repository.ensure_sample_videos(admin_id, std, DEFAULT_VIDEO_SAMPLES)
 
 
@@ -594,8 +599,13 @@ def list_dashboard_videos(
         enrollment_number=current_context["enrollment_number"],
         limit=limit,
     )
-    return [_prepare_video_payload(video) for video in videos]
-
+    # return [_prepare_video_payload(video) for video in videos]
+    filtered_videos = [
+        video
+        for video in videos
+        if not _is_legacy_video_url(video.get("video_url"))
+    ]
+    return [_prepare_video_payload(video) for video in filtered_videos]
 
 def get_video_detail(
     *,
