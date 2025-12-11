@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.repository.lecture_repository import LectureRepository
 from app.database import get_db
 from app.models.chapter_material import LectureGen
+from app.utils.dependencies import get_current_user
 
 router = APIRouter(
     prefix="/lectures",
@@ -62,8 +63,51 @@ async def list_public_lectures(
 
 @router.get(
     "/filters",
-    summary="Fetch available class and subject filters from database",
+    summary="Fetch available class and subject filters for authenticated admin",
 )
+async def get_lecture_filters(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    # Extract admin_id: for admins it's in "id", for members it's in "admin_id"
+    if current_user.get("role") == "admin":
+        admin_id = current_user.get("id")
+    else:
+        admin_id = current_user.get("admin_id")
+    
+    rows = (
+        db.query(LectureGen.std, LectureGen.subject)
+        .filter(
+            LectureGen.std.isnot(None),
+            LectureGen.subject.isnot(None),
+            LectureGen.admin_id == admin_id
+        )
+        .distinct()
+        .all()
+    )
+
+    class_map: DefaultDict[str, Set[str]] = DefaultDict(set)
+    for std, subject in rows:
+        std_value = (std or "").strip()
+        subject_value = (subject or "").strip()
+        if not std_value or not subject_value:
+            continue
+        class_map[std_value].add(subject_value)
+
+    std_subject_filters = [
+        {
+            "std": std_value,
+            "subject": sorted(subjects),
+        }
+        for std_value, subjects in sorted(class_map.items())
+    ]
+
+    return {
+        "status": True,
+        "message": "Lecture filters fetched successfully",
+        "data": std_subject_filters,
+    }
+
 @router.get(
     "/public_lecture/filters",
     summary="Fetch available class and subject filters from database",
@@ -103,12 +147,21 @@ async def get_public_lecture_filters(
 
 @router.get(
     "/public_lecture/played",
-    summary="List public lectures that have been played",
+    summary="List played public lectures for the authenticated admin",
 )
 async def list_played_public_lectures(
+    current_user: Dict[str, Any] = Depends(get_current_user),
     repository: LectureRepository = Depends(get_repository),
 ) -> Dict[str, Any]:
-    lectures = await repository.list_played_lectures()
+    admin_id = current_user.get("admin_id")
+    # lectures = await repository.list_played_lectures(admin_id=admin_id)
+    # Extract admin_id: for admins it's in "id", for members it's in "admin_id"
+    if current_user.get("role") == "admin":
+        admin_id = current_user.get("id")
+    else:
+        admin_id = current_user.get("admin_id")
+    
+    lectures = await repository.list_played_lectures(admin_id=admin_id)
 
     return {
         "status": True,

@@ -356,10 +356,19 @@ async def list_lectures(
     std: Optional[str] = None,
     subject: Optional[str] = None,
     division: Optional[str] = None,
+    admin_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """List lectures with optional filtering."""
     with get_pg_cursor() as cur:
-        cur.execute("SELECT * FROM lecture_gen ORDER BY created_at DESC")
+        query = "SELECT * FROM lecture_gen"
+        params: Dict[str, Any] = {}
+
+        if admin_id is not None:
+            query += " WHERE admin_id = %(admin_id)s"
+            params["admin_id"] = admin_id
+
+        query += " ORDER BY created_at DESC"
+        cur.execute(query, params)
         rows = cur.fetchall()
 
     std_filter = _slugify(std) if std else None
@@ -409,10 +418,19 @@ async def list_lectures(
     return summaries[offset : offset + limit]
 
 
-async def list_played_lectures() -> List[Dict[str, Any]]:
+async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """Return lectures which have a play_count greater than zero."""
+    query = "SELECT * FROM lecture_gen"
+    params: Dict[str, Any] = {}
+
+    if admin_id is not None:
+        query += " WHERE admin_id = %(admin_id)s"
+        params["admin_id"] = admin_id
+
+    query += " ORDER BY created_at DESC"
+        
     with get_pg_cursor() as cur:
-        cur.execute("SELECT * FROM lecture_gen ORDER BY updated_at DESC")
+        cur.execute(query, params)
         rows = cur.fetchall()
 
     played: List[Dict[str, Any]] = []
@@ -558,6 +576,7 @@ class LectureRepository:
         std: Optional[str] = None,
         subject: Optional[str] = None,
         division: Optional[str] = None,
+        admin_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         return await list_lectures(
             language=language,
@@ -566,10 +585,11 @@ class LectureRepository:
             std=std,
             subject=subject,
             division=division,
+            admin_id=admin_id,
         )
 
-    async def list_played_lectures(self) -> List[Dict[str, Any]]:
-        return await list_played_lectures()
+    async def list_played_lectures(self, admin_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        return await list_played_lectures(admin_id=admin_id)
 
     async def get_class_subject_filters(self) -> Dict[str, Any]:
         return await get_class_subject_filters()

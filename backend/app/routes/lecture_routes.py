@@ -27,7 +27,7 @@ from app.repository.lecture_repository import LectureRepository
 from app.services.lecture_generation_service import GroqService
 from app.services.lecture_share_service import LectureShareService
 from app.schemas.admin_schema import WorkType
-from app.utils.dependencies import member_required
+from app.utils.dependencies import admin_or_lecture_member, get_current_user, member_required
 from app.database import get_db
 load_dotenv()
 
@@ -263,8 +263,8 @@ async def get_lecture(
 @router.get(
     "/",
     response_model=List[LectureSummaryResponse],
-    summary="List all lectures",
-    description="Get a list of all lectures with optional filtering"
+    summary="List  lectures for the autenticated admin",
+    description="Get a list of lectures generated within the current admin account with optional filtering"
 )
 async def list_lectures(
     language: Optional[str] = Query(None, description="Filter by language"),
@@ -273,6 +273,7 @@ async def list_lectures(
     division: Optional[str] = Query(None, description="Filter by division/section"),
     limit: int = Query(100, ge=1, le=500, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     repository: LectureRepository = Depends(get_repository),
 ) -> List[LectureSummaryResponse]:
     """
@@ -285,6 +286,12 @@ async def list_lectures(
     - *offset*: Number of results to skip for pagination
     """
     try:
+        # Extract admin_id: for admins it's in "id", for members it's in "admin_id"
+        if current_user.get("role") == "admin":
+            admin_id = current_user.get("id")
+        else:
+            admin_id = current_user.get("admin_id")
+
         lectures = await repository.list_lectures(
             language=language,
             std=std,
@@ -292,6 +299,7 @@ async def list_lectures(
             division=division,
             limit=limit,
             offset=offset,
+            admin_id=admin_id,
         )
         return [LectureSummaryResponse(**lecture) for lecture in lectures]
         
