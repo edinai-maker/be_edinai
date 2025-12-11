@@ -268,39 +268,44 @@ async def delete_lectures_by_metadata(
     lecture_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Delete lectures matching metadata filters directly from the database."""
-
     std_filter = _slugify(std)
     subject_filter = _slugify(subject)
     division_filter = _slugify(division) if division else None
-
     with get_pg_cursor() as cur:
-        cur.execute("""
-            SELECT * FROM lecture_gen
-            WHERE std = %(std)s AND subject = %(subject)s
-        """, {
-            "std": std_filter,
-            "subject": subject_filter,
-        })
-        candidate_rows = cur.fetchall()
+            cur.execute("""
+                SELECT * FROM lecture_gen
+            """)
+            all_rows = cur.fetchall()
 
     deleted: List[Dict[str, Any]] = []
-    for row in candidate_rows:
+    std_filter = _slugify(std)
+    subject_filter = _slugify(subject)
+    division_filter = _slugify(division) if division else None
+    for row in all_rows:
         record = row.get("lecture_data") or {}
         metadata = record.get("metadata") or {}
+     # Get values from metadata first, then fall back to database columns
+        std_value = metadata.get("std") or metadata.get("class") or row.get("std")
+        subject_value = metadata.get("subject") or row.get("subject")
         division_value = metadata.get("division") or metadata.get("section")
         division_slug = _slugify(division_value) if division_value else None
         if division_filter and division_slug != division_filter:
+            # If lecture_id is specified, only delete that specific lecture
+            if lecture_id and row.get("lecture_uid") != lecture_id:
+                continue
+        # Compare using slugified versions
+        if _slugify(std_value) != std_filter:
             continue
-
+        if _slugify(subject_value) != subject_filter:
+            continue
         lecture_entry = {
             "lecture_id": row.get("lecture_uid"),
             "title": record.get("title") or row.get("chapter_title"),
-
-            "std": metadata.get("std") or metadata.get("class") or row.get("std"),
-            "subject": metadata.get("subject") or row.get("subject"),
+            "std": std_value,
+            "subject": subject_value,
             "division": division_value,
-            "std_slug": _slugify(metadata.get("std") or metadata.get("class") or row.get("std")),
-            "subject_slug": _slugify(metadata.get("subject") or row.get("subject")),
+            "std_slug": _slugify(std_value),
+            "subject_slug": _slugify(subject_value),
             "division_slug": division_slug,
         }
 

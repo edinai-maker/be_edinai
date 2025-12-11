@@ -43,8 +43,15 @@ async def list_public_lectures(
     language: Optional[str] = Query(default=None, description="Filter by lecture language"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     repository: LectureRepository = Depends(get_repository),
+    
 ) -> Dict[str, Any]:
+    # Extract admin_id: for admins it's in "id", for members it's in "admin_id"
+    if current_user.get("role") == "admin":
+        admin_id = current_user.get("id")
+    else:
+        admin_id = current_user.get("admin_id")
     lectures = await repository.list_lectures(
         std=std,
         subject=subject,
@@ -52,14 +59,18 @@ async def list_public_lectures(
         language=language,
         limit=limit,
         offset=offset,
+        admin_id=admin_id,
     )
-
+    if not lectures:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No lectures found for provided filters",
+        )
     return {
         "status": True,
         "message": "Lectures fetched successfully",
         "data": {"lectures": lectures, "count": len(lectures)},
     }
-
 
 @router.get(
     "/filters",
