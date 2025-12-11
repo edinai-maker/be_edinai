@@ -635,7 +635,7 @@ def get_student_management_dashboard(admin_id: int) -> Dict[str, object]:
     )
 
     total_chapters = dashboard_repository.count_members(admin_id, work_type="chapter", active_only=True)
-    total_lectures = 0  # Student-management dashboard shows static lecture counts per legacy API
+    total_lectures = dashboard_repository.count_total_lectures(admin_id)
 
     last_activity = (
         reference_member["last_login"].isoformat()
