@@ -4,9 +4,10 @@ import asyncio
 import json
 import logging
 import os
+from pydoc import resolve
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status, Query, Request, Body
@@ -60,7 +61,7 @@ from app.repository.chapter_material_repository import (
     list_subjects_for_std,
     list_standards_for_admin,
 )
-from app.plan_limits import PLAN_CREDIT_LIMITS
+from app.plan_limits import PLAN_CREDIT_LIMITS, PLAN_DURATION_LIMITS, PLAN_SUGGESTION_LIMITS
 from app.utils.file_handler import (
     save_uploaded_file,
     ALLOWED_PDF_EXTENSIONS,
@@ -98,12 +99,6 @@ MAX_ASSISTANT_SUGGESTIONS = 10
 DEFAULT_LANGUAGE_CODE = "eng"
 
 MERGED_LECTURES_DIR = Path("./storage/merged_lectures")
-
-PLAN_SUGGESTION_LIMITS = {
-    "20k": 2,
-    "50k": 5,
-    "100k": 8,
-}
 
 
 # -------------------------
@@ -299,6 +294,31 @@ def _get_admin_credit_summary(admin_id: int, current_user: dict) -> Dict[str, An
         "overflow_attempts": credit_usage["overflow_attempts"],
     }
 
+def _get_allowed_duration_options(admin_id: int, current_user: dict) -> Tuple[Optional[str], List[int]]:
+    plan_label = _resolve_plan_label_for_admin(admin_id, current_user, requested_plan_label=None)
+    max_duration = PLAN_DURATION_LIMITS.get(plan_label) if plan_label else None
+
+    if max_duration is None:
+        allowed = list(DURATION_OPTIONS)
+    else:
+        allowed = [duration for duration in DURATION_OPTIONS if int(duration) <= int(max_duration)]
+
+    if not allowed:
+        allowed = [DURATION_OPTIONS[0]]
+
+    return plan_label, allowed
+
+
+def _enforce_plan_duration(duration: Optional[int], allowed: List[int], plan_label: Optional[str]) -> Optional[int]:
+    if duration is None:
+        return None
+    if duration not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Duration {duration} is not allowed under the {plan_label or 'current'} plan.",
+        )
+    return duration
+
 def _ensure_lecture_config_access(current_user: dict) -> None:
     if current_user["role"] == "admin":
         return
@@ -344,6 +364,7 @@ def _build_lecture_config_response(
     *,
     requested_language: Optional[str],
     requested_duration: Optional[int],
+    duration_options: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     settings = get_settings()
     default_language = settings.dict().get("default_language") or getattr(settings, "default_language", None)
@@ -360,10 +381,12 @@ def _build_lecture_config_response(
         language_value = fallback_option["value"]
         language_label = fallback_option.get("label") or fallback_option["value"]
 
+    resolved_duration_option = l(duration_options) if duration_options else list(DURATION_OPTIONS)
+
     configured_default_duration = (
         getattr(settings, "default_lecture_duration", None)
         or settings.dict().get("default_lecture_duration")
-        or DURATION_OPTIONS[0]
+        or resolved_duration_option[0]
     )
     selected_duration = (
         requested_duration
@@ -371,8 +394,12 @@ def _build_lecture_config_response(
         else configured_default_duration
     )
 
+    if selected_duration not in resolved_duration_options:
+        selected_duration = resolved_duration_options[-1]
+
     return {
         "selected_duration": selected_duration,
+        "duration_options": resolved_duration_options,
         "selected_language": language_value,
         "selected_language_label": language_label,
         "video_duration_minutes": selected_duration,
@@ -508,6 +535,9 @@ def _prepare_generation_from_material(
     override_duration = _normalize_requested_duration(request.duration)
     if override_duration is not None:
         duration = override_duration
+
+    plan_label, allowed_duration = _get_allowed_duration_options(material_admin_id,current_user)
+    _enforce_plan_duration(duration, allowed_duration, plan_label)
     extracted_chapter_title = (topics_payload or {}).get("chapter_title") if topics_payload else None
     resolved_chapter_title = extracted_chapter_title or ""
     material_subject = material.get("subject") if isinstance(material, dict) else material.subject
@@ -682,6 +712,9 @@ def _prepare_generation_from_merged(
     override_duration = _normalize_requested_duration(request.duration)
     if override_duration is not None:
         duration = override_duration
+
+    plan_label, allowed_durations = _get_allowed_duration_options(int(creator_admin_id),current_user)
+    _enforce_plan_duration(duration, allowed_durations, plan_label)
     title = response_payload.get("chapter_title") 
     # Ensure title is never None or empty
     if not title or title.isspace():
@@ -1927,6 +1960,56 @@ async def assistant_add_topics_route(
     admin_id = material.get("admin_id") if isinstance(material, dict) else material.admin_id
     material_id = material.get("id") if isinstance(material, dict) else material.id
     chapter_number = material.get("chapter_number") if isinstance(material, dict) else material.chapter_number
+    
+    
+    plan_label = _resolve_plan_label_for_admin(admin_id, current_user, requested_plan_label=None)
+    plan_limit = PLAN_SUGGESTION_LIMITS.get(plan_label) if plan_label else None
+
+    if plan_limit is not None:
+        _, existing_topics = read_topics_file_if_exists(admin_id, material_id)
+        existing_topics = existing_topics or []
+        existing_titles = {
+            str(topic.get("title", "")).strip().lower()
+            for topic in existing_topics
+            if isinstance(topic, dict)
+        }
+        assistant_generated_count = sum(
+            1
+            for topic in existing_topics
+            if isinstance(topic, dict) and topic.get("is_assistant_generated")
+        )
+        remaining_capacity = max(plan_limit - assistant_generated_count, 0)
+
+        unique_selected_titles: Set[str] = set()
+        for suggestion in selected_suggestions:
+            if not isinstance(suggestion, dict):
+                continue
+            title = str(suggestion.get("title", "")).strip()
+            if not title:
+                continue
+            unique_selected_titles.add(title.lower())
+
+        addable_titles = [title for title in unique_selected_titles if title not in existing_titles]
+        requested_additions = len(addable_titles)
+
+        if remaining_capacity <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Assistant topic limit reached. Under the {plan_label} plan you can add a maximum of {plan_limit} assistant topics. "
+                    f"You have already added {assistant_generated_count}."
+                ),
+            )
+
+        if requested_additions > remaining_capacity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Under the {plan_label} plan you can add a maximum of {plan_limit} assistant topics. "
+                    f"You have already added {assistant_generated_count}. You can add only {remaining_capacity} more."
+                ),
+            )
+    
     result = add_assistant_topics_to_file(admin_id, material_id, chapter_number, selected_suggestions)
     sanitized_added: List[Dict[str, Any]] = []
     for topic in result.get("added_topics", []) or []:
@@ -1954,6 +2037,8 @@ async def post_lecture_generation_config(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     _ensure_lecture_config_access(current_user)
+    admin_id = _resolve_admin_id(current_user)
+    plan_label, allowed_durations = _get_allowed_duration_options(admin_id,current_user)
 
     requested_language = _normalize_requested_language(payload.language) or payload.language
     requested_duration = _normalize_requested_duration(payload.duration) if payload.duration is not None else payload.duration
@@ -1994,10 +2079,11 @@ async def post_lecture_generation_config(
                         payload.merged_id,
                         exc,
                     )
-
+    _enforce_plan_duration(requested_duration, allowed_durations, plan_label)
     config_response = _build_lecture_config_response(
         requested_language=requested_language,
         requested_duration=requested_duration,
+        duration_options=allowed_durations,
     )
 
     return {
