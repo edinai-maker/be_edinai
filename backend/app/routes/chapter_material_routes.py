@@ -381,12 +381,12 @@ def _build_lecture_config_response(
         language_value = fallback_option["value"]
         language_label = fallback_option.get("label") or fallback_option["value"]
 
-    resolved_duration_option = l(duration_options) if duration_options else list(DURATION_OPTIONS)
+    resolved_duration_options = list(duration_options) if duration_options else list(DURATION_OPTIONS)
 
     configured_default_duration = (
         getattr(settings, "default_lecture_duration", None)
         or settings.dict().get("default_lecture_duration")
-        or resolved_duration_option[0]
+        or resolved_duration_options[0]
     )
     selected_duration = (
         requested_duration
