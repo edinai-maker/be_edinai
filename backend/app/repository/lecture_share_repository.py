@@ -159,16 +159,43 @@ def list_shared_lectures(
 
     where_clause = " AND ".join(filters)
 
-    # We attempt to parse a lecture_id from the student_portal_videos.video_url
-    # assuming URLs of the form `/lectures/<std>/<subject>/<lecture_id>.json`.
-    # If the format differs, lecture_id may be NULL but the record will still
-    # surface as a shared entry with its video_url.
+    # We attempt to derive a lecture_id from the student_portal_videos.video_url
+    # for lecture-style URLs while keeping a safe fallback to the row id. Two
+    # primary patterns are supported:
+    # - Legacy JSON lectures: `/lectures/<std>/<subject>/<lecture_id>.json`
+    # - Recorded videos on storage: `/lectures/<admin_id>/<lecture_id>/<file>.mp4`
 
     query = f"""
         SELECT
 COALESCE(
-                NULLIF(split_part(split_part(spv.video_url, '/', 5), '.', 1), ''),
-                NULLIF(split_part(spv.video_url, '/', 4), ''),
+                NULLIF(
+                    CASE
+                        -- Legacy JSON lecture URLs: take the third segment
+                        -- after "/lectures/" (e.g. "142.json") and strip
+                        -- the extension.
+                        WHEN split_part(split_part(spv.video_url, '/lectures/', 2), '/', 3) LIKE '%%.json'
+                        THEN split_part(
+                            split_part(
+                                split_part(spv.video_url, '/lectures/', 2),
+                                '/',
+                                3
+                            ),
+                            '.',
+                            1
+                        )
+                        -- Storage-backed recordings: `/lectures/<admin>/<lecture_id>/<file>`.
+                        -- Here we treat the second segment after "/lectures/"
+                        -- as the lecture_id when it looks numeric.
+                        WHEN split_part(split_part(spv.video_url, '/lectures/', 2), '/', 2) ~ '^[0-9]+$'
+                        THEN split_part(
+                            split_part(spv.video_url, '/lectures/', 2),
+                            '/',
+                            2
+                        )
+                        ELSE NULL
+                    END,
+                    ''
+                ),
                 spv.id::text
             ) AS lecture_id,
             spv.title AS title,
