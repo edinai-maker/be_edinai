@@ -111,55 +111,68 @@ async def get_chapter_filters(
     std: Optional[str] = Query(None, description="Class/standard to fetch subjects for"),
     subject: Optional[str] = Query(None, description="Subject to fetch chapters for"),
     chapter: Optional[str] = Query(None, description="Chapter title to fetch lecture data for"),
+    chapter_alias: Optional[str] = Query(
+        None,
+        alias="chapters",
+        description="Legacy chapter filter alias (supports existing frontend requests)",
+    ),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ResponseBase:
     admin_id = _resolve_admin_id(current_user)
     standards = list_standards_for_admin(admin_id)
     subjects: List[str] = []
-    chapters: List[str] = []
+    chapter_options: List[str] = []
+    selected_chapter = chapter or chapter_alias
+
     lectures: List[Dict[str, Any]] = []
 
     if std:
         subjects = list_subjects_for_std(admin_id, std=std)
         if subject:
-            chapters = list_chapters_for_selection(
+            chapter_options = list_chapters_for_selection(
                 admin_id,
                 std=std,
                 subject=subject,
             )
-            if chapter:
-                chapter_clean = chapter.strip().lower()
-                chapters = [c for c in chapters if c.strip().lower() == chapter_clean]
-            lectures = _fetch_filtered_lectures(
-                db,
-                admin_id=admin_id,
-                std=std,
-                subject=subject,
-                chapter=chapter,
-            )
+            if selected_chapter:
+                chapter_clean = selected_chapter.strip().lower()
+                if chapter_clean not in {c.strip().lower() for c in chapter_options}:
+                    chapter_options = [selected_chapter]
+                else:
+                    chapter_options = [c for c in chapter_options if c.strip().lower() == chapter_clean]
+                material_ids = find_material_ids_for_chapter(
+                    admin_id=admin_id,
+                    std=std,
+                    subject=subject,
+                    chapter_identifier=selected_chapter,
+                )
+                lectures = _fetch_filtered_lectures(
+                    db,
+                    admin_id=admin_id,
+                    std=std,
+                    subject=subject,
+                    chapter=None if material_ids else selected_chapter,
+                    material_ids=material_ids,
+                )
 
     response_data = {
         "standards": standards,
         "subjects": subjects,
+        "chapter": chapter_options,
     }
-
-    if chapter:
-        response_data["chapter"] = chapters
-    else:
-        response_data["chapters"] = chapters
 
     response_data.update(
         {
             "selected_std": std,
             "selected_subject": subject,
+            "selected_chapter": selected_chapter,
             "lectures": lectures,
             "lectures_count": len(lectures),
         }
     )
 
     return ResponseBase(status=True, message="Chapter filters fetched", data=response_data)
-
 
 @router.get("/chapters", response_model=ResponseBase)
 async def list_chapters_endpoint(
@@ -805,8 +818,8 @@ def _fetch_filtered_lectures(
     std: Optional[str] = None,
     subject: Optional[str] = None,
     chapter: Optional[str] = None,
+    material_ids: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    lecture_alias = aliased(LectureGen)
     settings = get_settings()
     configured_default_duration = (
         getattr(settings, "default_lecture_duration", None)
@@ -819,59 +832,59 @@ def _fetch_filtered_lectures(
         or "/static/images/lecture-placeholder.png"
     )
 
-    latest_lecture_subquery = (
-        db.query(
-            LectureGen.material_id.label("material_id"),
-            func.max(LectureGen.created_at).label("latest_created_at"),
-        )
-        .filter(LectureGen.admin_id == admin_id)
-        .group_by(LectureGen.material_id)
-        .subquery()
-    )
+    # latest_lecture_subquery = (
+    #     db.query(
+    #         LectureGen.material_id.label("material_id"),
+    #         func.max(LectureGen.created_at).label("latest_created_at"),
+    #     )
+    #     .filter(LectureGen.admin_id == admin_id)
+    #     .group_by(LectureGen.material_id)
+    #     .subquery()
+    # )
 
-    query = (
-        db.query(
-            ChapterMaterial,
-            lecture_alias.lecture_uid,
-            lecture_alias.chapter_title,
-            lecture_alias.lecture_link,
-            lecture_alias.created_at.label("lecture_created_at"),
-            lecture_alias.lecture_data,
-        )
-        .filter(ChapterMaterial.admin_id == admin_id)
-        .outerjoin(
-            latest_lecture_subquery,
-            latest_lecture_subquery.c.material_id == ChapterMaterial.id,
-        )
-        .outerjoin(
-            lecture_alias,
-            (lecture_alias.material_id == ChapterMaterial.id)
-            & (
-                lecture_alias.created_at == latest_lecture_subquery.c.latest_created_at
-            ),
-        )
-    )
+    # query = (
+    #     db.query(
+    #         ChapterMaterial,
+    #         lecture_alias.lecture_uid,
+    #         lecture_alias.chapter_title,
+    #         lecture_alias.lecture_link,
+    #         lecture_alias.created_at.label("lecture_created_at"),
+    #         lecture_alias.lecture_data,
+    #     )
+    #     .filter(ChapterMaterial.admin_id == admin_id)
+    #     .outerjoin(
+    #         latest_lecture_subquery,
+    #         latest_lecture_subquery.c.material_id == ChapterMaterial.id,
+    #     )
+    #     .outerjoin(
+    #         lecture_alias,
+    #         (lecture_alias.material_id == ChapterMaterial.id)
+    #         & (
+    #             lecture_alias.created_at == latest_lecture_subquery.c.latest_created_at
+    #         ),
+    #     )
+    # )
 
-    if std:
-        query = query.filter(func.lower(func.trim(ChapterMaterial.std)) == std.strip().lower())
-    if subject:
-        query = query.filter(func.lower(func.trim(ChapterMaterial.subject)) == subject.strip().lower())
-    if chapter:
-        chapter_clean = chapter.strip().lower()
-        title_expr = func.lower(
-            func.trim(
-                func.coalesce(ChapterMaterial.chapter_title, "")
-            )
-        )
-        number_expr = func.lower(func.trim(ChapterMaterial.chapter_number))
-        query = query.filter(
-            or_(
-                title_expr == chapter_clean,
-                number_expr == chapter_clean,
-            )
-        )
+    # if std:
+    #     query = query.filter(func.lower(func.trim(ChapterMaterial.std)) == std.strip().lower())
+    # if subject:
+    #     query = query.filter(func.lower(func.trim(ChapterMaterial.subject)) == subject.strip().lower())
+    # if chapter:
+    #     chapter_clean = chapter.strip().lower()
+    #     title_expr = func.lower(
+    #         func.trim(
+    #             func.coalesce(ChapterMaterial.chapter_title, "")
+    #         )
+    #     )
+    #     number_expr = func.lower(func.trim(ChapterMaterial.chapter_number))
+    #     query = query.filter(
+    #         or_(
+    #             title_expr == chapter_clean,
+    #             number_expr == chapter_clean,
+    #         )
+    #     )
 
-    records = query.order_by(desc(ChapterMaterial.created_at)).all()
+    # records = query.order_by(desc(ChapterMaterial.created_at)).all()
 
     storage_base = Path("./storage/chapter_lectures")
     items: List[Dict[str, Any]] = []
@@ -898,7 +911,9 @@ def _fetch_filtered_lectures(
                 break
         return filtered
     base_query = db.query(LectureGen).filter(LectureGen.admin_id == admin_id)
-
+    
+    if material_ids:
+        base_query = base_query.filter(LectureGen.material_id.in_(material_ids))
     if std:
         std_clean = std.strip().lower()
         base_query = base_query.filter(func.lower(func.trim(LectureGen.std)) == std_clean)

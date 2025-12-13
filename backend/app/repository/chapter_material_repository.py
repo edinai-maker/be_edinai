@@ -341,11 +341,61 @@ def get_chapter_filter_options(
     response.sort(key=lambda entry: entry["label"].lower())
     return {"classes": response}
 
-
+def find_material_ids_for_chapter(
+    admin_id: int,
+    std: str,
+    subject: str,
+    chapter_identifier: Optional[str],
+) -> List[int]:
+    """Return material IDs whose chapter title/number matches the identifier."""
+    identifier = (chapter_identifier or "").strip().lower()
+    if not identifier:
+        return []
+    base_where = """
+        admin_id = %(admin_id)s
+        AND LOWER(std) = %(std)s
+        AND LOWER(subject) = %(subject)s
+    """
+    exact_query = f"""
+        SELECT id
+        FROM chapter_materials
+        WHERE {base_where}
+        AND (
+            LOWER(COALESCE(chapter_title, '')) = %(identifier)s
+            OR LOWER(chapter_number) = %(identifier)s
+        )
+    """
+    params = {
+        "admin_id": admin_id,
+        "std": std.strip().lower(),
+        "subject": subject.strip().lower(),
+        "identifier": identifier,
+    }
+    with get_pg_cursor() as cur:
+        cur.execute(exact_query, params)
+        rows = cur.fetchall()
+    if rows:
+        return [row["id"] for row in rows if row.get("id") is not None]
+    like_query = f"""
+        SELECT id
+        FROM chapter_materials
+        WHERE {base_where}
+        AND (
+            LOWER(COALESCE(chapter_title, '')) LIKE %(identifier_like)s
+            OR LOWER(chapter_number) LIKE %(identifier_like)s
+        )
+    """
+    params["identifier_like"] = f"%{identifier}%"
+    with get_pg_cursor() as cur:
+        cur.execute(like_query, params)
+        rows = cur.fetchall()
+    return [row["id"] for row in rows if row.get("id") is not None]
+    
 def list_chapters_for_selection(
     admin_id: int,
     std: str,
     subject: str,
+
 ) -> List[str]:
     query = """
         SELECT chapter_title_override, chapter_title, chapter_number
