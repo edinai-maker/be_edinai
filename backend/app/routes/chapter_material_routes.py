@@ -60,6 +60,7 @@ from app.repository.chapter_material_repository import (
     list_chapters_for_selection,
     list_subjects_for_std,
     list_standards_for_admin,
+    find_material_ids_for_chapter,
 )
 from app.plan_limits import PLAN_CREDIT_LIMITS, PLAN_DURATION_LIMITS, PLAN_SUGGESTION_LIMITS
 from app.utils.file_handler import (
