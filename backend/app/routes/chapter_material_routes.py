@@ -4,9 +4,10 @@ import asyncio
 import json
 import logging
 import os
+from pydoc import resolve
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status, Query, Request, Body
@@ -60,7 +61,7 @@ from app.repository.chapter_material_repository import (
     list_subjects_for_std,
     list_standards_for_admin,
 )
-from app.plan_limits import PLAN_CREDIT_LIMITS
+from app.plan_limits import PLAN_CREDIT_LIMITS, PLAN_DURATION_LIMITS, PLAN_SUGGESTION_LIMITS
 from app.utils.file_handler import (
     save_uploaded_file,
     ALLOWED_PDF_EXTENSIONS,
@@ -98,12 +99,6 @@ MAX_ASSISTANT_SUGGESTIONS = 10
 DEFAULT_LANGUAGE_CODE = "eng"
 
 MERGED_LECTURES_DIR = Path("./storage/merged_lectures")
-
-PLAN_SUGGESTION_LIMITS = {
-    "20k": 2,
-    "50k": 5,
-    "100k": 8,
-}
 
 
 # -------------------------
@@ -299,6 +294,31 @@ def _get_admin_credit_summary(admin_id: int, current_user: dict) -> Dict[str, An
         "overflow_attempts": credit_usage["overflow_attempts"],
     }
 
+def _get_allowed_duration_options(admin_id: int, current_user: dict) -> Tuple[Optional[str], List[int]]:
+    plan_label = _resolve_plan_label_for_admin(admin_id, current_user, requested_plan_label=None)
+    max_duration = PLAN_DURATION_LIMITS.get(plan_label) if plan_label else None
+
+    if max_duration is None:
+        allowed = list(DURATION_OPTIONS)
+    else:
+        allowed = [duration for duration in DURATION_OPTIONS if int(duration) <= int(max_duration)]
+
+    if not allowed:
+        allowed = [DURATION_OPTIONS[0]]
+
+    return plan_label, allowed
+
+
+def _enforce_plan_duration(duration: Optional[int], allowed: List[int], plan_label: Optional[str]) -> Optional[int]:
+    if duration is None:
+        return None
+    if duration not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Duration {duration} is not allowed under the {plan_label or 'current'} plan.",
+        )
+    return duration
+
 def _ensure_lecture_config_access(current_user: dict) -> None:
     if current_user["role"] == "admin":
         return
@@ -344,6 +364,7 @@ def _build_lecture_config_response(
     *,
     requested_language: Optional[str],
     requested_duration: Optional[int],
+    duration_options: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     settings = get_settings()
     default_language = settings.dict().get("default_language") or getattr(settings, "default_language", None)
@@ -360,10 +381,12 @@ def _build_lecture_config_response(
         language_value = fallback_option["value"]
         language_label = fallback_option.get("label") or fallback_option["value"]
 
+    resolved_duration_options = list(duration_options) if duration_options else list(DURATION_OPTIONS)
+
     configured_default_duration = (
         getattr(settings, "default_lecture_duration", None)
         or settings.dict().get("default_lecture_duration")
-        or DURATION_OPTIONS[0]
+        or resolved_duration_options[0]
     )
     selected_duration = (
         requested_duration
@@ -371,8 +394,12 @@ def _build_lecture_config_response(
         else configured_default_duration
     )
 
+    if selected_duration not in resolved_duration_options:
+        selected_duration = resolved_duration_options[-1]
+
     return {
         "selected_duration": selected_duration,
+        "duration_options": resolved_duration_options,
         "selected_language": language_value,
         "selected_language_label": language_label,
         "video_duration_minutes": selected_duration,
@@ -508,6 +535,9 @@ def _prepare_generation_from_material(
     override_duration = _normalize_requested_duration(request.duration)
     if override_duration is not None:
         duration = override_duration
+
+    plan_label, allowed_duration = _get_allowed_duration_options(material_admin_id,current_user)
+    _enforce_plan_duration(duration, allowed_duration, plan_label)
     extracted_chapter_title = (topics_payload or {}).get("chapter_title") if topics_payload else None
     resolved_chapter_title = extracted_chapter_title or ""
     material_subject = material.get("subject") if isinstance(material, dict) else material.subject
@@ -682,6 +712,9 @@ def _prepare_generation_from_merged(
     override_duration = _normalize_requested_duration(request.duration)
     if override_duration is not None:
         duration = override_duration
+
+    plan_label, allowed_durations = _get_allowed_duration_options(int(creator_admin_id),current_user)
+    _enforce_plan_duration(duration, allowed_durations, plan_label)
     title = response_payload.get("chapter_title") 
     # Ensure title is never None or empty
     if not title or title.isspace():
@@ -773,6 +806,7 @@ def _fetch_filtered_lectures(
     subject: Optional[str] = None,
     chapter: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    lecture_alias = aliased(LectureGen)
     settings = get_settings()
     configured_default_duration = (
         getattr(settings, "default_lecture_duration", None)
@@ -784,6 +818,60 @@ def _fetch_filtered_lectures(
         or settings.dict().get("default_lecture_thumbnail")
         or "/static/images/lecture-placeholder.png"
     )
+
+    latest_lecture_subquery = (
+        db.query(
+            LectureGen.material_id.label("material_id"),
+            func.max(LectureGen.created_at).label("latest_created_at"),
+        )
+        .filter(LectureGen.admin_id == admin_id)
+        .group_by(LectureGen.material_id)
+        .subquery()
+    )
+
+    query = (
+        db.query(
+            ChapterMaterial,
+            lecture_alias.lecture_uid,
+            lecture_alias.chapter_title,
+            lecture_alias.lecture_link,
+            lecture_alias.created_at.label("lecture_created_at"),
+            lecture_alias.lecture_data,
+        )
+        .filter(ChapterMaterial.admin_id == admin_id)
+        .outerjoin(
+            latest_lecture_subquery,
+            latest_lecture_subquery.c.material_id == ChapterMaterial.id,
+        )
+        .outerjoin(
+            lecture_alias,
+            (lecture_alias.material_id == ChapterMaterial.id)
+            & (
+                lecture_alias.created_at == latest_lecture_subquery.c.latest_created_at
+            ),
+        )
+    )
+
+    if std:
+        query = query.filter(func.lower(func.trim(ChapterMaterial.std)) == std.strip().lower())
+    if subject:
+        query = query.filter(func.lower(func.trim(ChapterMaterial.subject)) == subject.strip().lower())
+    if chapter:
+        chapter_clean = chapter.strip().lower()
+        title_expr = func.lower(
+            func.trim(
+                func.coalesce(ChapterMaterial.chapter_title, "")
+            )
+        )
+        number_expr = func.lower(func.trim(ChapterMaterial.chapter_number))
+        query = query.filter(
+            or_(
+                title_expr == chapter_clean,
+                number_expr == chapter_clean,
+            )
+        )
+
+    records = query.order_by(desc(ChapterMaterial.created_at)).all()
 
     storage_base = Path("./storage/chapter_lectures")
     items: List[Dict[str, Any]] = []
@@ -810,55 +898,56 @@ def _fetch_filtered_lectures(
                 break
         return filtered
 
-    base_query = db.query(LectureGen).filter(LectureGen.admin_id == admin_id)
+    def _topics_from_lecture_payload(payload: Optional[Dict[str, Any]]) -> List[str]:
+        if not isinstance(payload, dict):
+            return []
+        slides = payload.get("slides") or []
+        slide_titles: List[Optional[str]] = []
+        for slide in slides:
+            if isinstance(slide, dict):
+                slide_titles.append(slide.get("title"))
+        return _filter_topic_titles(slide_titles)
 
-    if std:
-        std_clean = std.strip().lower()
-        base_query = base_query.filter(func.lower(func.trim(LectureGen.std)) == std_clean)
-    if subject:
-        subject_clean = subject.strip().lower()
-        base_query = base_query.filter(func.lower(func.trim(LectureGen.subject)) == subject_clean)
-    if chapter:
-        chapter_clean = chapter.strip().lower()
-        base_query = base_query.filter(func.lower(func.trim(LectureGen.chapter_title)) == chapter_clean)
+    for (
+        material,
+        lecture_uid,
+        _chapter_title_from_row,
+        lecture_link,
+        lecture_created_at,
+        lecture_data,
+    ) in records:
+        topics_data: List[Dict[str, Any]] = []
+        extracted_chapter_title = None
 
-    records = base_query.order_by(desc(LectureGen.created_at)).all()
+        try:
+            payload, topics_list = read_topics_file_if_exists(material.admin_id, material.id)
+            if topics_list:
+                topics_data = topics_list[:5]
+            if payload and payload.get("chapter_title"):
+                extracted_chapter_title = payload.get("chapter_title")
+        except Exception:
+            topics_data = []
 
-    for record in records:
-        lecture_data_raw = record.lecture_data
-        lecture_data: Optional[Dict[str, Any]] = None
-        if isinstance(lecture_data_raw, dict):
-            lecture_data = lecture_data_raw
-        elif isinstance(lecture_data_raw, str):
-            try:
-                lecture_data = json.loads(lecture_data_raw)
-            except (json.JSONDecodeError, TypeError):
-                lecture_data = None
+        fallback_topics = _filter_topic_titles([
+            topic.get("title") if isinstance(topic, dict) else None for topic in topics_data
+        ])
 
-        if not lecture_data:
-            continue
-
-        slides = lecture_data.get("slides") or []
-        if not isinstance(slides, list) or not slides:
-            continue
-
-        topic_titles = _filter_topic_titles(
-            [slide.get("title") if isinstance(slide, dict) else None for slide in slides]
-        )
+        lecture_topics = _topics_from_lecture_payload(lecture_data)
+        topic_titles = lecture_topics or fallback_topics
         if not topic_titles:
             continue
 
         chapter_title = (
-            (record.chapter_title or "").strip()
-            or lecture_data.get("chapter_title")
-            or lecture_data.get("metadata", {}).get("chapter_title")
+            _chapter_title_from_row
+            or extracted_chapter_title
+            or material.chapter_title
+            or material.chapter_number
             or ""
         )
 
         lecture_size = 0
-        thumbnail_url: Optional[str] = record.cover_photo_url
-        lecture_uid = record.lecture_uid
-        if record.lecture_link and lecture_uid:
+        thumbnail_url: Optional[str] = None
+        if lecture_link and lecture_uid:
             try:
                 lecture_json_path = storage_base / lecture_uid / "lecture.json"
                 if lecture_json_path.exists():
@@ -875,34 +964,38 @@ def _fetch_filtered_lectures(
                 pass
 
         lecture_duration_minutes: Optional[int] = None
-        duration_candidates = [
-            lecture_data.get("estimated_duration"),
-            lecture_data.get("requested_duration"),
-            lecture_data.get("metadata", {}).get("duration"),
-        ]
-        for candidate in duration_candidates:
-            if candidate is not None:
-                try:
-                    lecture_duration_minutes = int(candidate)
-                    break
-                except (TypeError, ValueError):
-                    continue
+        if isinstance(lecture_data, dict):
+            duration_candidates = [
+                lecture_data.get("estimated_duration"),
+                lecture_data.get("requested_duration"),
+                lecture_data.get("metadata", {}).get("duration"),
+            ]
+            for candidate in duration_candidates:
+                if candidate is not None:
+                    try:
+                        lecture_duration_minutes = int(candidate)
+                        break
+                    except (TypeError, ValueError):
+                        continue
+
+        resolved_lecture_id = str(lecture_uid or material.id)
+        admin_id_value = material.admin_id
 
         effective_duration = lecture_duration_minutes or configured_default_duration
-        resolved_lecture_id = str(lecture_uid or record.id)
 
         items.append(
             {
                 "id": resolved_lecture_id,
                 "lecture_uid": resolved_lecture_id,
-                "admin_id": record.admin_id,
-                "material_id": record.material_id,
-                "lecture_link": record.lecture_link,
-                "std": record.std,
-                "subject": record.subject,
+                "lecture_uuid": resolved_lecture_id,
+                "admin_id": admin_id_value,
+                "material_id": material.id,
+                "lecture_link": lecture_link,
+                "std": material.std,
+                "subject": material.subject,
                 "chapter": chapter_title,
                 "topics": topic_titles,
-                "size": format_file_size(lecture_size),
+                "size": format_file_size(lecture_size or material.file_size or 0),
                 "video_duration_minutes": effective_duration,
                 "thumbnail_url": thumbnail_url or default_thumbnail_url,
             }
@@ -1867,6 +1960,56 @@ async def assistant_add_topics_route(
     admin_id = material.get("admin_id") if isinstance(material, dict) else material.admin_id
     material_id = material.get("id") if isinstance(material, dict) else material.id
     chapter_number = material.get("chapter_number") if isinstance(material, dict) else material.chapter_number
+    
+    
+    plan_label = _resolve_plan_label_for_admin(admin_id, current_user, requested_plan_label=None)
+    plan_limit = PLAN_SUGGESTION_LIMITS.get(plan_label) if plan_label else None
+
+    if plan_limit is not None:
+        _, existing_topics = read_topics_file_if_exists(admin_id, material_id)
+        existing_topics = existing_topics or []
+        existing_titles = {
+            str(topic.get("title", "")).strip().lower()
+            for topic in existing_topics
+            if isinstance(topic, dict)
+        }
+        assistant_generated_count = sum(
+            1
+            for topic in existing_topics
+            if isinstance(topic, dict) and topic.get("is_assistant_generated")
+        )
+        remaining_capacity = max(plan_limit - assistant_generated_count, 0)
+
+        unique_selected_titles: Set[str] = set()
+        for suggestion in selected_suggestions:
+            if not isinstance(suggestion, dict):
+                continue
+            title = str(suggestion.get("title", "")).strip()
+            if not title:
+                continue
+            unique_selected_titles.add(title.lower())
+
+        addable_titles = [title for title in unique_selected_titles if title not in existing_titles]
+        requested_additions = len(addable_titles)
+
+        if remaining_capacity <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Assistant topic limit reached. Under the {plan_label} plan you can add a maximum of {plan_limit} assistant topics. "
+                    f"You have already added {assistant_generated_count}."
+                ),
+            )
+
+        if requested_additions > remaining_capacity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Under the {plan_label} plan you can add a maximum of {plan_limit} assistant topics. "
+                    f"You have already added {assistant_generated_count}. You can add only {remaining_capacity} more."
+                ),
+            )
+    
     result = add_assistant_topics_to_file(admin_id, material_id, chapter_number, selected_suggestions)
     sanitized_added: List[Dict[str, Any]] = []
     for topic in result.get("added_topics", []) or []:
@@ -1894,6 +2037,8 @@ async def post_lecture_generation_config(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     _ensure_lecture_config_access(current_user)
+    admin_id = _resolve_admin_id(current_user)
+    plan_label, allowed_durations = _get_allowed_duration_options(admin_id,current_user)
 
     requested_language = _normalize_requested_language(payload.language) or payload.language
     requested_duration = _normalize_requested_duration(payload.duration) if payload.duration is not None else payload.duration
@@ -1934,10 +2079,11 @@ async def post_lecture_generation_config(
                         payload.merged_id,
                         exc,
                     )
-
+    _enforce_plan_duration(requested_duration, allowed_durations, plan_label)
     config_response = _build_lecture_config_response(
         requested_language=requested_language,
         requested_duration=requested_duration,
+        duration_options=allowed_durations,
     )
 
     return {
