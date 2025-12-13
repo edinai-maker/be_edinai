@@ -145,7 +145,7 @@ async def create_member(
 ) -> ResponseBase:
     target_admin_id = _resolve_admin_id(current_user)
     member, created = admin_portal_service.create_member(target_admin_id, payload)
-    message = "Member created successfully" if created else "Member already existed"
+    message = "Member created successfully" if created else "Email already existed"
     return ResponseBase(
         status=True,
         message=message,

@@ -21,8 +21,6 @@ class ChapterMaterial(Base):
     chapter_title = Column(String(255), nullable=True)
     file_name = Column(String(255), nullable=False)
     file_path = Column(String(512), nullable=False)
-    cover_photo_url = Column(String(512), nullable=True)
-    cover_photo_s3_key = Column(String(512), nullable=True)
     file_size = Column(BigInteger, nullable=False, default=0)
     is_global = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -43,8 +41,6 @@ class ChapterMaterial(Base):
             "file_name": self.file_name,
             "file_path": self.file_path,
             "file_size": self.file_size,
-            "cover_photo_url": self.cover_photo_url,
-            "cover_photo_s3_key": self.cover_photo_s3_key,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -63,7 +59,6 @@ class LectureGen(Base):
     chapter_title = Column("lecture_title", String(255), nullable=False)
     lecture_link = Column(String(512), nullable=False)  # JSON URL will be stored here
     lecture_data = Column(JSON, nullable=True)
-    cover_photo_url = Column(String(512), nullable=True)
 
     subject = Column(String(128), nullable=True)
     std = Column(String(32), nullable=True)

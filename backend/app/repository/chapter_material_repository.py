@@ -147,57 +147,6 @@ def create_chapter_material(
     
     return result if result else {}
 
-def update_chapter_material_cover_photo(
-
-    material_id: int,
-
-    *,
-
-    cover_photo_url: Optional[str],
-
-    cover_photo_s3_key: Optional[str],
-
-) -> Dict[str, Any]:
-
-    query = """
-
-        UPDATE chapter_materials
-
-        SET cover_photo_url = %(cover_photo_url)s,
-
-            cover_photo_s3_key = %(cover_photo_s3_key)s,
-
-            updated_at = NOW()
-
-        WHERE id = %(id)s
-
-        RETURNING *
-
-    """
-
-    with get_pg_cursor() as cur:
-
-        cur.execute(
-
-            query,
-
-            {
-
-                "id": material_id,
-
-                "cover_photo_url": cover_photo_url,
-
-                "cover_photo_s3_key": cover_photo_s3_key,
-
-            },
-
-        )
-
-        result = cur.fetchone()
-
-    return result if result else {}
-
-
 def update_chapter_material_overrides(
     material_id: int,
     *,
