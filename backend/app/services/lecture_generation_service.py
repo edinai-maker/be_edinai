@@ -16,6 +16,7 @@ from groq import Groq
 
 def wrap_math_expressions(text: str) -> str:
     """Wrap mathematical expressions in LaTeX delimiters for proper rendering."""
+    
     math_patterns = [
         (r'\b(\d+\s*[+\-×÷]\s*\d+)\b', r'$\1$'),
         (r'\b(\d+\s*[+\-×÷]\s*\d+\s*[+\-×÷]\s*\d+)\b', r'$\1$'),
@@ -26,6 +27,10 @@ def wrap_math_expressions(text: str) -> str:
         (r'\b(HCF|LCM|GCD|sin|cos|tan|log|ln|exp)\(', r'$\\\1('),
         (r'\b([a-zA-Z]\s*[=≠<>≤≥]\s*[\d\w+\-×÷^()√π]+)', r'$\1$'),
     ]
+    narration = re.sub(r'(?<!\\\)(\d+/\d+)', r'$\\frac{\1}$', narration)
+    narration = re.sub(r'\^(\d+)', r'^{\1}', narration)
+    narration = re.sub(r'(=|\+|-|×|÷)\s*(\d+)', r'\1 $\2$', narration)
+    return narration
     
     for pattern, replacement in math_patterns:
         text = re.sub(pattern, replacement, text)
@@ -35,289 +40,319 @@ def wrap_math_expressions(text: str) -> str:
 
 
 def detect_math_content(text: str) -> bool:
-    """Detect if content is Math-related based on keywords and patterns."""
+    """Enhanced math content detection with better accuracy."""
+    
+    # Expanded math keywords
     math_keywords = [
-        'mathematics', 'algebra', 'arithmetic', 'polynomial', 'quadratic equation',
-        'linear equation', 'matrix', 'determinant', 'eigenvalue', 'permutation',
-        'combination', 'factorial', 'binomial', 'sequence', 'series', 'logarithm',
-        'prime number', 'composite number', 'factorization', 'theorem', 'proof',
-        'गणित', 'बीजगणित', 'अंकगणित', 'समीकरण', 'आव्यूह', 'क्रमचय', 'संचय',
-        'અનુક્રમ', 'શ્રેણી', 'પ્રમેય', 'સાબિતી', 'ગણિત', 'બીજગણિત',
+        # English - Core Math
+        'mathematics', 'math', 'maths', 'algebra', 'arithmetic', 'geometry', 'trigonometry',
+        'polynomial', 'quadratic', 'linear', 'equation', 'formula', 'theorem', 'proof',
+        'prime', 'composite', 'factor', 'factorization', 'factorisation', 'divisor',
+        'hcf', 'lcm', 'gcd', 'fraction', 'decimal', 'percentage', 'ratio', 'proportion',
+        'exponent', 'power', 'square', 'cube', 'root', 'logarithm', 'exponential',
+        'derivative', 'integral', 'calculus', 'differentiation', 'integration',
+        'angle', 'triangle', 'circle', 'rectangle', 'area', 'perimeter', 'volume',
+        'coordinate', 'graph', 'function', 'domain', 'range', 'slope', 'intercept',
+        'matrix', 'determinant', 'vector', 'scalar', 'sequence', 'series', 'progression',
+        'probability', 'statistics', 'mean', 'median', 'mode', 'variance', 'deviation',
+        
+        # Hindi - गणित keywords
+        'गणित', 'गणितीय', 'बीजगणित', 'अंकगणित', 'ज्यामिति', 'त्रिकोणमिति',
+        'समीकरण', 'सूत्र', 'प्रमेय', 'उपपत्ति', 'सिद्ध', 'प्रमाण', 'साबित',
+        'अभाज्य', 'भाज्य', 'गुणनखंड', 'गुणनखण्डन', 'भाजक', 'विभाजक',
+        'महत्तम', 'समापवर्तक', 'लघुत्तम', 'समापवर्त्य', 'भिन्न', 'दशमलव',
+        'प्रतिशत', 'अनुपात', 'समानुपात', 'घात', 'घातांक', 'वर्ग', 'घन',
+        'मूल', 'वर्गमूल', 'घनमूल', 'लघुगणक', 'कोण', 'त्रिभुज', 'वृत्त',
+        'आयत', 'क्षेत्रफल', 'परिमाप', 'आयतन', 'निर्देशांक', 'ग्राफ', 'फलन',
+        'आव्यूह', 'सारणिक', 'सदिश', 'अदिश', 'अनुक्रम', 'श्रेणी', 'प्रगति',
+        'प्रायिकता', 'सांख्यिकी', 'माध्य', 'माध्यिका', 'बहुलक',
+        'यूक्लिड', 'एल्गोरिदम', 'एल्गोरिथम', 'विभाजन', 'पूर्णांक',
+        'वास्तविक', 'संख्या', 'परिमेय', 'अपरिमेय',
+        
+        # Gujarati - ગણિત keywords
+        'ગણિત', 'ગાણિતિક', 'બીજગણિત', 'અંકગણિત', 'ભૂમિતિ', 'ત્રિકોણમિતિ',
+        'સમીકરણ', 'સૂત્ર', 'પ્રમેય', 'પુરાવો', 'સાબિતી',
+        'અવિભાજ્ય', 'ભાજ્ય', 'અવયવ', 'ગુણાકાર', 'ભાગાકાર', 'ભાજક',
+        'મહત્તમ', 'લઘુત્તમ', 'સમાપવર્તક', 'ભિન્ન', 'દશાંશ',
+        'ટકા', 'ગુણોત્તર', 'પ્રમાણ', 'ઘાત', 'ઘાતાંક', 'વર્ગ', 'ઘન',
+        'મૂળ', 'વર્ગમૂળ', 'લોગરિધમ', 'કોણ', 'ત્રિકોણ', 'વર્તુળ',
+        'લંબચોરસ', 'ક્ષેત્રફળ', 'પરિમિતિ', 'ઘનફળ', 'આલેખ', 'વિધેય',
+        'અનુક્રમણિકા', 'શ્રેણી', 'સંભાવના', 'આંકડાશાસ્ત્ર', 'સરેરાશ',
     ]
     
     text_lower = text.lower()
-    keyword_count = sum(1 for keyword in math_keywords if keyword.lower() in text_lower)
     
-    math_patterns = [
-        r'(polynomial|quadratic|linear)\s+(equation|expression)',
-        r'(permutation|combination|factorial)',
-        r'(prime|composite)\s+number',
-        r'(theorem|lemma|corollary|proof)',
-        r'(matrix|determinant|eigenvalue)',
-        r'(set\s+theory|subset|union|intersection)',
+    # Count keyword matches
+    keyword_count = sum(1 for kw in math_keywords if kw.lower() in text_lower)
+    
+    # Strong math patterns (more comprehensive)
+    strong_patterns = [
+        r'(theorem|proof|lemma|corollary|axiom)',
+        r'(प्रमेय|सिद्ध|प्रमाण|उपपत्ति|साबित)',
+        r'(પ્રમેય|સાબિતી|પુરાવો)',
+        r'(equation|formula|expression)',
+        r'(समीकरण|सूत्र|व्यंजक)',
+        r'(સમીકરણ|સૂત્ર)',
+        r'(hcf|lcm|gcd|gcf)',
+        r'(महत्तम|समापवर्तक|लघुत्तम)',
+        r'(મહત્તમ|લઘુત્તમ|સમાપવર્તક)',
+        r'(prime|factor|divisor|multiple)',
+        r'(अभाज्य|गुणनखंड|भाजक)',
+        r'(અવિભાજ્ય|અવયવ|ભાજક)',
+        r'(solve|find|calculate|prove|verify)',
+        r'(हल करें|ज्ञात करें|सिद्ध करें)',
+        r'(ઉકેલો|શોધો|સાબિત કરો)',
+        r'(rational|irrational|real number)',
+        r'(परिमेय|अपरिमेय|वास्तविक संख्या)',
+        r'(યુક્લિડ|વિભાજન|અલ્ગોરિધમ)',
+        r'(यूक्लिड|विभाजन|एल्गोरिदम|एल्गोरिथम)',
+        r'(euclid|division|algorithm)',
+        r'(fundamental theorem)',
+        r'(आधारभूत प्रमेय|मूलभूत प्रमेय)',
     ]
     
-    pattern_matches = sum(1 for pattern in math_patterns if re.search(pattern, text, re.IGNORECASE))
+    pattern_matches = sum(1 for p in strong_patterns if re.search(p, text_lower))
     
-    return keyword_count >= 5 or pattern_matches >= 3 or (keyword_count >= 3 and pattern_matches >= 2)
+    # Math symbols and notations
+    math_symbols = ['×', '÷', '√', '²', '³', '∞', '≠', '≤', '≥', '±', '∑', '∏', 'π']
+    symbol_count = sum(text.count(s) for s in math_symbols)
+    
+    # Basic operators (more lenient counting)
+    basic_ops = ['+', '-', '=']
+    basic_count = sum(text.count(s) for s in basic_ops)
+    
+    # Math-specific number patterns
+    number_patterns = [
+        r'\d+\s*[+\-×÷]\s*\d+',  # 5 + 3, 10 × 2
+        r'\d+\^\d+',              # 2^3
+        r'\d+/\d+',               # 3/4 (fraction)
+        r'\b\d+\.\d+\b',          # 3.14 (decimal)
+    ]
+    number_pattern_count = sum(1 for p in number_patterns if re.search(p, text))
+    
+    # Debug information
+    print(f"🔍 Math Detection Debug:")
+    print(f"   Keywords: {keyword_count}")
+    print(f"   Patterns: {pattern_matches}")
+    print(f"   Symbols: {symbol_count}")
+    print(f"   Basic ops: {basic_count}")
+    print(f"   Number patterns: {number_pattern_count}")
+    
+    # More lenient detection criteria
+    return (
+        keyword_count >= 2 or           # Just 2 math keywords
+        pattern_matches >= 1 or         # Any strong pattern match
+        symbol_count >= 3 or            # 3+ math symbols
+        number_pattern_count >= 3 or    # 3+ math number patterns
+        (keyword_count >= 1 and basic_count >= 5)  # 1 keyword + 5 operators
+    )
+
+def detect_science_content(text: str) -> bool:
+    """Detect if content is Science-related."""
+    science_keywords = [
+        "physics", "chemistry", "biology", "botany", "zoology",
+        "electricity", "magnetism", "cell", "photosynthesis",
+        "ecosystem", "force", "motion", "energy", "atom", "molecule",
+        "reaction", "experiment", "lab", "genetics",
+        "विज्ञान", "भौतिकी", "रसायन", "जीवविज्ञान",
+        "વિજ્ઞાન", "ભૌતિક", "રસાયણ", "જીવવિજ્ઞાન"
+    ]
+    text_lower = text.lower()
+    keyword_hits = sum(1 for keyword in science_keywords if keyword in text_lower)
+    return keyword_hits >= 4
 
 
 # ============================================================================
 # PROMPT TEMPLATES
 # ============================================================================
 
-def create_lecture_prompt(*, text: str, language: str, duration: int, style: str) -> str:
-    """Build optimized prompt for lecture generation with strict JSON structure and improved engagement."""
 
+def _get_word_targets(duration: int) -> Dict[str, str]:
+    """Return intro/normal/deep word targets for supported durations."""
+    if duration == 30:
+        return {"intro": "140-170", "normal": "200-250", "deep": "300-350"}
+    if duration == 45:
+        return {"intro": "170-220", "normal": "200-250", "deep": "350-400"}
+    return {"intro": "220-260", "normal": "250-300", "deep": "400-450"}
+
+
+def create_lecture_prompt(*, text: str, language: str, duration: int, style: str) -> str:
+    """Universal prompt for all subjects with subject-specific enhancements."""
+    
+    # Duration-based word counts
+    words = _get_word_targets(duration)
+    
+    # Language instructions
     language_instructions = {
         "Gujarati": (
             "LANGUAGE RULES:\n"
-            "1. Keep ONLY technical words in English (algorithm, database, API, function).\n"
-            "2. Write all other narration in simple Gujarati.\n"
-            "3. Use friendly, conversational Gujarati—like a real classroom teacher.\n"
-            "4. Add easy English words naturally.\n"
-            "5. Keep English 20–30% only.\n"
-            "6. Avoid formal English words; keep it natural.\n"
-            "7. Example: 'Algorithm એક simple રીત છે જેને આપણે સમસ્યા solve કરવા use કરીએ છીએ.'"
+            "1. Technical terms ONLY in English.\n"
+            "2. All explanations in simple Gujarati for std 5-12.\n"
+            "3. Use short, clear sentences.\n"
+            "4. Keep tone friendly and student-like.\n"
         ),
         "Hindi": (
             "LANGUAGE RULES:\n"
-            "1. Keep ONLY technical/domain terms in English.\n"
-            "2. All explanations in simple Hindi.\n"
-            "3. Use everyday, easy-to-understand language.\n"
-            "4. Mix easy English words naturally.\n"
-            "5. Keep English 20–30%.\n"
-            "6. Avoid textbook-style language.\n"
-            "7. Example: 'Algorithm एक तरीका है जिससे हम problem को आसानी से solve कर पाते हैं.'"
+            "1. Technical terms ONLY in English.\n"
+            "2. All explanations in simple Hindi for std 5-12.\n"
+            "3. Use short, clear sentences.\n"
+            "4. Keep tone friendly and engaging.\n"
         ),
         "English": (
-            "Write in simple, student-friendly, conversational English.\n"
-            "Avoid formal or academic tone."
+            "LANGUAGE RULES:\n"
+            "1. Use simple, student-friendly English.\n"
+            "2. Clear explanations for std 5-12.\n"
+            "3. Keep tone engaging and easy to understand.\n"
         )
     }
-
-    lang_instruction = language_instructions.get(
-        language,
-        f"Generate content in {language} with natural mixing of terminology."
-    )
-
+    
+    lang_instruction = language_instructions.get(language, f"Generate in {language}")
+    
+    # Detect subject type
+    is_math = detect_math_content(text)
+    is_science = detect_science_content(text)
+    
+    print(f"🔍 Detected: Math={is_math}, Science={is_science}")
+    
+    # Subject-specific instructions
+    subject_instructions = []
+    
+    if is_math:
+        subject_instructions.append(
+            "📐 MATH CONTENT DETECTED - SPECIAL REQUIREMENTS:\n"
+            "1. Format ALL mathematical expressions with LaTeX:\n"
+            "   - Inline: $x^2 + 5x + 6$\n"
+            "   - Display: $$x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}$$\n"
+            "   - Fractions: \\frac{numerator}{denominator}\n"
+            "   - Exponents: a^{b}, Subscripts: a_{b}\n"
+            "2. Extract ACTUAL problems from source (NO generic examples)\n"
+            "3. Show COMPLETE step-by-step solutions:\n"
+            "   - Given: [State problem]\n"
+            "   - To Find: [What to solve]\n"
+            "   - Step 1: [First step with LaTeX]\n"
+            "     $$equation_1$$\n"
+            "   - Step 2: [Next step]\n"
+            "     $$equation_2$$\n"
+            "   - Continue all steps...\n"
+            "   - Final Answer: $$\\boxed{result}$$\n"
+            "4. For theorems: State theorem, then prove step-by-step\n"
+            "5. Extract formulas from source and explain when to use them\n"
+            "6. Slides 4-7 MUST include at least ONE fully worked problem each\n"
+        )
+    
+    if is_science:
+        subject_instructions.append(
+            "🔬 SCIENCE CONTENT DETECTED:\n"
+            "1. Mention key formulas, laws, and scientific principles\n"
+            "2. Describe experiments and observations\n"
+            "3. Use diagrams and label key parts (describe verbally)\n"
+            "4. Connect theory to real-life applications\n"
+            "5. Include scientific notation where relevant\n"
+        )
+    
+    if not subject_instructions:
+        subject_instructions.append(
+            "📚 GENERAL CONTENT:\n"
+            "1. Use practical examples from the chapter\n"
+            "2. Keep explanations clear and relatable\n"
+            "3. Include real-world connections\n"
+        )
+    
+    subject_block = "\n\n".join(subject_instructions)
+    
     prompt = f"""
-Create a {duration}-minute highly engaging, story-driven educational lecture based on the provided source material.
-
-IMPORTANT:
-- Source content may be Gujarati, Hindi, or English.
-- Understand the EXACT meaning before generating.
-- Topic MUST match the source.
+Create a {duration}-minute educational lecture from the provided chapter.
 
 {lang_instruction}
 
-TEACHING STYLE (VERY IMPORTANT):
-- Speak like a friendly, energetic classroom teacher.
-- Use stories, analogies, everyday examples.
-- Add light humor where appropriate.
-- Ask small reflective questions to keep students alert.
-- Explain concepts using "imagine", "think of it like…", "have you ever noticed…?"
-- Avoid boring textbook tone.
-- Requested style: {style}. Adapt tone accordingly (fun, exam-focused, storytelling, motivational).
+{subject_block}
 
-REQUIRED JSON OUTPUT:
+CRITICAL INSTRUCTIONS:
+1. Read ALL topics and subtopics from the source material
+2. Generate content ONLY from the actual chapter content
+3. Extract actual examples, problems, and concepts from source
+4. Maintain the exact sequence of topics as they appear
+5. NO invented/generic examples - use source material only
+
+OUTPUT FORMAT:
+Return ONLY valid JSON with exactly 9 slides:
 {{
-  "slides": [ /* 9 slides */ ],
+  "slides": [9 slide objects],
   "estimated_duration": {duration}
 }}
 
-====================================================
-🚀 MANDATORY SLIDE STRUCTURE (9 SLIDES)
-====================================================
+MANDATORY 9-SLIDE STRUCTURE:
 
 === SLIDE 1: INTRODUCTION ===
 {{
-  "title": "Introduction to [Topic]",
+  "title": "Introduction to [Actual Topic from Source]",
   "bullets": [],
-  "narration": "Start with a fun hook or story. Then explain why this topic matters in real life. Use 250+ words with an energetic, friendly tone.",
+  "narration": "Start with interesting hook. Explain the topic and its importance. Preview what students will learn. ({words['intro']} words)",
   "question": ""
 }}
 
-=== SLIDE 2: KEY POINTS ===
+=== SLIDE 2: KEY CONCEPTS ===
 {{
-  "title": "Key Points You Must Know",
-  "bullets": ["Key Point 1", "Key Point 2", "Key Point 3"],
-  "narration": "Explain these points in simple language with at least one small example or analogy.",
-  "question": "Ask one short reflective question based on these key points."
+  "title": "Important Concepts You Must Know",
+  "bullets": ["Concept 1", "Concept 2", "Concept 3"],
+  "narration": "Explain key concepts from the chapter with short examples. ({words['normal']} words)",
+  "question": "Quick understanding check question"
 }}
 
-=== SLIDE 3: INTERESTING INSIGHTS & FUN UNDERSTANDING ===
+=== SLIDE 3: DEEP UNDERSTANDING ===
 {{
-  "title": "Interesting Insights — Making the Topic Come Alive",
+  "title": "Deep Understanding of the Topic",
   "bullets": [],
-  "narration": "Turn this slide into a fun, engaging section. Use mini stories, surprising facts, or relatable daily-life situations. Make students say: 'Ohhh, now I get it!' Include at least two fun mini-stories or observations.",
-  "question": "Ask one curiosity-driven question that makes students think deeper."
+  "narration": "Explain deeper meaning behind the topic using clear steps. ({words['normal']} words)",
+  "question": "Curiosity-building question"
 }}
 
-=== SLIDES 4–7: DEEP TEACHING WITH EXAMPLES ===
-Pattern for each slide:
-- Concept explanation (2–3 paragraphs)
-- Real-life example (1–2 paragraphs)
-- Another concept explanation
-- Another relatable example
-Word count: 600–1000 words per slide  
-Tone: Interactive, story-rich, classroom-like.
+=== SLIDES 4-7: DETAILED TEACHING ===
+For EACH slide:
+- Pick next subtopic from source (in order)
+- Explain the concept clearly
+- Provide examples/applications from source
+- If Math: Include fully worked problem with step-by-step solution
+- If Science: Describe relevant experiment or application
+- Target: {words['deep']} words
+
+{{
+  "title": "[Subtopic from Source]",
+  "bullets": [],
+  "narration": "[Detailed explanation with examples from source]",
+  "subnarrations": [
+    {{
+      "title": "[Subtopic name]",
+      "summary": "[40-60 word summary of key points]"
+    }}
+  ],
+  "question": ""
+}}
 
 === SLIDE 8: PRACTICAL APPLICATIONS ===
 {{
-  "title": "How to Apply This Knowledge",
+  "title": "Where This Knowledge Is Useful",
   "bullets": [],
-  "narration": "Show real-world uses, career value, and daily life applications. Motivate students. (280+ words)",
+  "narration": "Explain real-life applications and practical uses. ({words['normal']} words)",
   "question": ""
 }}
 
-=== SLIDE 9: QUIZ & REFLECTION ===
+=== SLIDE 9: QUIZ & SUMMARY ===
 {{
-  "title": "Quiz Time - Test Your Understanding",
+  "title": "Quick Summary & Quiz",
   "bullets": [],
-  "narration": "Give a friendly recap in 3–5 sentences, encouraging revision.",
+  "narration": "Summarize key concepts in 3-5 lines.",
   "question": "1. Question 1?\\n2. Question 2?\\n3. Question 3?\\n4. Question 4?\\n5. Question 5?"
 }}
 
-SOURCE MATERIAL:
+SOURCE MATERIAL (Use ALL content):
 {text[:60000]}
 
-NOW GENERATE EXACTLY 9 SLIDES with integrated teaching and examples.
+Generate exactly 9 slides based entirely on the source content above.
+Return ONLY valid JSON, NO markdown fences.
 """
+    
     return prompt
-
-
-def create_math_lecture_prompt(*, text: str, language: str, duration: int, style: str) -> str:
-    """Build prompt for MATH lectures with proper mathematical formatting."""
-    
-    language_instructions = {
-        "Gujarati": (
-            "GUIDELINES FOR GUJARATI MATH LECTURE:\n"
-            "1. Use English only for pure math terms (equation, theorem, polynomial).\n"
-            "2. Write explanations in Gujarati.\n"
-            "3. Format math expressions: $...$ for inline, $$...$$ for display.\n"
-            "4. Use LaTeX: \\frac{a}{b}, a^b, a_b\n"
-            "5. Structure with clear steps and proper notation."
-        ),
-        "Hindi": (
-            "GUIDELINES FOR HINDI MATH LECTURE:\n"
-            "1. Use English only for pure math terms.\n"
-            "2. Write explanations in Hindi.\n"
-            "3. Format math expressions: $...$ for inline, $$...$$ for display.\n"
-            "4. Use LaTeX: \\frac{a}{b}, a^b, a_b\n"
-            "5. Structure with clear steps and proper notation."
-        ),
-        "English": (
-            "GUIDELINES FOR ENGLISH MATH LECTURE:\n"
-            "1. Simple, student-friendly English.\n"
-            "2. Format math: $...$ inline, $$...$$ display.\n"
-            "3. Use LaTeX notation properly.\n"
-            "4. Clear step-by-step explanations."
-        )
-    }
-    
-    lang_instruction = language_instructions.get(language, language_instructions["English"])
-    
-    prompt = f"""
-Create a {duration}-minute MATHEMATICS lecture with proper formatting:
-- Use LaTeX math delimiters: $...$ inline, $$...$$ display
-- Use \\frac{{num}}{{den}}, ^, _, \\times, \\div
-- Include step-by-step derivations
-- All expressions properly formatted
-
-{lang_instruction}
-
-REQUIRED JSON OUTPUT STRUCTURE:
-{{
-  "slides": [/* 9 slides */],
-  "estimated_duration": {duration}
-}}
-
-MANDATORY SLIDES:
-1. Introduction with math concepts [250+ words]
-2. Key Concepts with formulas
-3. Important Formulas & Theorems
-4-7. Step-by-step teaching with solved examples [600-1000 words each]
-8. Practice Problems with Solutions
-9. Quiz & Real-World Applications
-
-SOURCE MATERIAL:
-{text[:60000]}
-
-Generate 9 slides with step-by-step solutions and proper LaTeX formatting.
-"""
-    return prompt
-
-
-def generate_fallback_content(*, text: str, language: str, duration: int) -> Dict[str, Any]:
-    """Generate fallback slides when generation fails."""
-    
-    templates = {
-        "English": {
-            "title": "Concept {}",
-            "default_bullet": "Key point from source material",
-            "narration": "Let's explore this concept. {}",
-            "question": "What aspect interests you most?",
-        },
-        "Gujarati": {
-            "title": "વિચાર {}",
-            "default_bullet": "સામગ્રીમાંથી મુખ્ય મુદ્દો",
-            "narration": "ચાલો આ concept સમજીએ. {}",
-            "question": "કયો ભાગ તમને interesting લાગે છે?",
-        },
-        "Hindi": {
-            "title": "अवधारणा {}",
-            "default_bullet": "सामग्री से मुख्य बिंदु",
-            "narration": "आइए इस concept को समझें। {}",
-            "question": "कौन सा हिस्सा आपको interesting लगता है?",
-        },
-    }
-    
-    template = templates.get(language, templates["English"])
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-    
-    if not sentences:
-        sentences = [template["default_bullet"]]
-    
-    slides = []
-    
-    # Slide 1: Introduction
-    slides.append({
-        "number": 1,
-        "title": "Introduction",
-        "bullets": [],
-        "narration": " ".join(sentences[:5]) if len(sentences) >= 5 else template["narration"].format(template["default_bullet"]),
-        "question": "",
-    })
-    
-    # Slides 2-8
-    for i in range(2, 9):
-        start_idx = i * 5
-        chunk = sentences[start_idx:start_idx + 5] if len(sentences) > start_idx else [template["default_bullet"]]
-        allow_bullets = i in (2, 3)
-        bullets = chunk[:3] if allow_bullets else []
-        slides.append({
-            "number": i,
-            "title": f"{template['title'].format(i)}",
-            "bullets": bullets,
-            "narration": "" if i <= 3 else " ".join(chunk),
-            "question": "",
-        })
-    
-    # Slide 9: Quiz
-    slides.append({
-        "number": 9,
-        "title": "Quiz & Reflection",
-        "bullets": [],
-        "narration": "",
-        "question": "1. First question?\n2. Second question?\n3. Third question?\n4. Fourth question?\n5. Fifth question?"
-    })
-    
-    return {
-        "slides": slides,
-        "total_slides": 9,
-        "estimated_duration": duration,
-    }
 
 
 # ============================================================================
@@ -334,114 +369,299 @@ class GroqService:
     def configured(self) -> bool:
         return self._client is not None
     
-    async def generate_lecture_content(
-        self,
-        *,
-        text: str,
-        language: str = "English",
-        duration: int = 30,
-        style: str = "storytelling",
-    ) -> Dict[str, Any]:
-        """Generate lecture content using Groq API."""
-        if not self.configured:
-            raise RuntimeError("Groq API client is not configured.")
+    def _format_source_material(self, text: str) -> str:
+        """Extract and format complete topic content including all narrations."""
         
-        base_prompt = self._create_lecture_prompt(
+        if "Topic:" not in text:
+            return text
+        
+        formatted_sections = []
+        lines = text.split('\n')
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            if line.startswith("Topic:"):
+                topic_title = line.replace("Topic:", "").strip()
+                formatted_sections.append(f"\n{'='*60}")
+                formatted_sections.append(f"TOPIC: {topic_title}")
+                formatted_sections.append(f"{'='*60}\n")
+                i += 1
+                
+            elif line.startswith("Subtopic:"):
+                subtopic_line = line.replace("Subtopic:", "").strip()
+                i += 1
+                
+                # Next line(s) might contain narration in quotes
+                narration = ""
+                while i < len(lines):
+                    next_line = lines[i].strip()
+                    if next_line.startswith("Topic:") or next_line.startswith("Subtopic:"):
+                        break
+                    if next_line:
+                        # Remove quotes and collect narration
+                        cleaned = next_line.strip('"').strip()
+                        if cleaned:
+                            narration += " " + cleaned
+                    i += 1
+                
+                formatted_sections.append(f"\n### {subtopic_line}")
+                if narration:
+                    formatted_sections.append(f"{narration.strip()}\n")
+                
+            else:
+                i += 1
+        
+        result = "\n".join(formatted_sections)
+        
+        # If formatting produced good content, use it
+        if len(result.strip()) > len(text.strip()) * 0.5:
+            print(f"\n📝 Formatted source material ({len(result)} chars):")
+            print(result[:500] + "..." if len(result) > 500 else result)
+            return result
+        
+        # Otherwise return original
+        return text
+    async def generate_lecture_content(
+        self, 
+        text: str, 
+        language: str = "Hindi", 
+        duration: int = 30, 
+        style: str = "clear"
+    ) -> Dict[str, Any]:
+        """Generate lecture with automatic subject detection."""
+        
+        if not self._client:
+            raise RuntimeError("Groq API key missing")
+        
+        # Detect subject type
+        is_math = detect_math_content(text)
+        is_science = detect_science_content(text)
+        
+        print(f"📚 Generating lecture: Math={is_math}, Science={is_science}, Lang={language}")
+        
+        # Use universal prompt (with subject-specific enhancements)
+        prompt = create_lecture_prompt(
             text=text,
             language=language,
             duration=duration,
-            style=style,
+            style=style
         )
         
-        system_message = {
-            "role": "system",
-            "content": (
-                f"You are an expert teacher who creates engaging lectures. "
-                f"CRITICAL: Generate ALL content in {language}. "
-                f"Follow language mixing instructions precisely. "
-                f"Respond ONLY with valid JSON."
-            ),
-        }
+        # Call API
+        completion = await asyncio.to_thread(
+            self._client.chat.completions.create,
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"You are an expert {language} teacher. Output ONLY valid JSON with exactly 9 slides."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            model="openai/gpt-oss-120b",
+            temperature=0.2 if is_math else 0.3,
+            max_tokens=32000
+        )
         
-        max_attempts = 3
-        last_failure: Optional[str] = None
+        response = completion.choices[0].message.content.strip()
+        response = re.sub(r"^```(?:json)?\s*|\s*```$", "", response, flags=re.DOTALL).strip()
         
         try:
-            for attempt in range(1, max_attempts + 1):
-                prompt = base_prompt
-                if last_failure:
-                    prompt += (
-                        f"\n\nRETRY: Previous failed because: {last_failure}.\n"
-                        "Generate EXACTLY 9 slides with 600-1000 word narrations for slides 4-7."
-                    )
-                
-                completion = await self._create_chat_completion(
-                    messages=[system_message, {"role": "user", "content": prompt}],
-                    model="llama-3.3-70b-versatile",
-                )
-                
-                response = completion["choices"][0]["message"]["content"]
-                print(f"\n🔄 Attempt {attempt} - Response length: {len(response)}")
-                
-                parsed = self._parse_lecture_response(response)
-                slides = parsed.get("slides") or []
-                failure_reason: Optional[str] = None
-                
-                if not slides:
-                    failure_reason = "No properly formatted slides found."
-                elif len(slides) != 9:
-                    # failure_reason = f"Expected 9 slides but got {len(slides)}."
-                    completed_slides = self._fill_missing_slides(
-                        slides=slides,
-                        language=language,
-                        duration=duration,
-                        text=text,
-                    )
-                    if completed_slides:
-                        print("ℹ️ Completed missing slides with fallback.")
-                        parsed["slides"] = completed_slides
-                        slides = completed_slides
-                        parsed["total_slides"] = len(completed_slides)
-                    else:
-                        failure_reason = f"Expected 9 slides but got {len(slides)}."
-                
-                if language in ["Hindi", "Gujarati"]:
-                    self._enforce_minimum_narration(slides, language)
-                    # Language mixing validation disabled - too strict and blocks valid lectures
-                    # validation_errors = self._validate_language_mixing(parsed, language)
-                    # if validation_errors:
-                    #     print("⚠️ Language mixing validation failed:")
-                    #     for error in validation_errors:
-                    #         print(f"  - {error}")
-                    #     failure_reason = ", ".join(validation_errors)
-                    validation_errors = self._validate_language_mixing(parsed, language)
-                    if validation_errors:
-                        print("⚠️ Language mixing validation failed:")
-                        for error in validation_errors:
-                            print(f"  - {error}")
-                        failure_reason = ", ".join(validation_errors)
-                
-                if not failure_reason:
-                    print(f"✅ Generation successful on attempt {attempt}")
-                    return parsed
-                
-                last_failure = failure_reason
-                
-                print(f"⚠️ Attempt {attempt} failed: {failure_reason}")
-            
-            print("⚠️ All attempts failed. Returning fallback.")
-            fallback_result = generate_fallback_content(
-                text=text,
+            data = json.loads(response)
+        except json.JSONDecodeError as e:
+            repaired_response = self._repair_json_response(response)
+            try:
+                data = json.loads(repaired_response)
+            except json.JSONDecodeError as repaired_error:
+                raise RuntimeError(f"Invalid JSON from model: {repaired_error}") from e
+        
+        slides = data.get("slides", [])
+        if len(slides) != 9:
+            slides = await self._retry_exact_slide_count(
+                base_prompt=prompt,
+                original_response=response,
                 language=language,
                 duration=duration,
+                is_math=is_math,
             )
-            fallback_result["fallback_used"] = True
-            fallback_result["fallback_reason"] = last_failure or "Unknown issue."
-            return fallback_result
+        
+        # Post-process based on subject
+        if is_math:
+            slides = self._enhance_math_slides(slides)
+        
+        # Add subnarrations for slides 4-7
+        for i in range(3, 7):
+            if i < len(slides):
+                slide = slides[i]
+                if not slide.get("subnarrations"):
+                    narration = slide.get("narration", "")
+                    words = narration.split()
+                    summary = " ".join(words[:50]) + ("..." if len(words) > 50 else "")
+                    slide["subnarrations"] = [{
+                        "title": slide.get("title", ""),
+                        "summary": summary
+                    }]
+        
+        return {
+            "slides": slides,
+            "estimated_duration": duration
+        }
+    async def _retry_exact_slide_count(
+        self,
+        *,
+        base_prompt: str,
+        original_response: str,
+        language: str,
+        duration: int,
+        is_math: bool,
+    ) -> List[Dict[str, Any]]:
+        """Retry once with explicit instruction to produce exactly 9 slides."""
+        if not self._client:
+            raise RuntimeError("Groq API key missing")
+        
+        retry_messages = [
+            {
+                "role": "system",
+                "content": f"You are an expert {language} teacher. Output ONLY valid JSON with exactly 9 slides.",
+            },
+            {"role": "user", "content": base_prompt},
+            {"role": "assistant", "content": original_response},
+            {
+                "role": "user",
+                "content": (
+                    "Your previous JSON response did not contain exactly 9 slides. "
+                    "Regenerate the lecture now, strictly following the 9-slide template. "
+                    "Return ONLY valid JSON with exactly 9 slide objects inside the `slides` array "
+                    "and include the `estimated_duration` field."
+                ),
+            },
+        ]
+        
+        completion = await asyncio.to_thread(
+            self._client.chat.completions.create,
+            messages=retry_messages,
+            model="openai/gpt-oss-120b",
+            temperature=0.2 if is_math else 0.3,
+            max_tokens=32000,
+        )
+        
+        retry_response = completion.choices[0].message.content.strip()
+        retry_response = re.sub(r"^```(?:json)?\s*|\s*```$", "", retry_response, flags=re.DOTALL).strip()
+        
+        try:
+            data = json.loads(retry_response)
+        except json.JSONDecodeError:
+            repaired_response = self._escape_invalid_backslashes(retry_response)
+            data = json.loads(repaired_response)
+        
+        slides = data.get("slides", [])
+        if len(slides) != 9:
+            raise RuntimeError(f"Expected 9 slides after retry, got {len(slides)}")
+        
+        return slides
+    def _repair_json_response(self, text: str) -> str:
+        """Attempt to fix malformed JSON produced by the LLM."""
+        cleaned = text.strip()
+        if not cleaned:
+            return cleaned
+        
+        # Remove surrounding markdown fences if any
+        cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', cleaned, flags=re.IGNORECASE)
+        
+        cleaned = self._escape_invalid_backslashes(cleaned)
+        cleaned = self._ensure_valid_unicode_sequences(cleaned)
+        return cleaned
+    def _escape_invalid_backslashes(self, text: str) -> str:
+        """Escape stray backslashes (e.g. from LaTeX) to keep JSON valid."""
+        builder: List[str] = []
+        i = 0
+        length = len(text)
+        while i < length:
+            ch = text[i]
+            if ch != '\\':
+                builder.append(ch)
+                i += 1
+                continue
             
-        except Exception as e:
-            print(f"\n❌ ERROR: {type(e).__name__}: {str(e)}")
-            raise
+            # At this point ch is backslash
+            if i + 1 >= length:
+                builder.append('\\\\')
+                i += 1
+                continue
+            
+            nxt = text[i + 1]
+            if nxt in '"\\/bfnrt':
+                builder.append('\\' + nxt)
+                i += 2
+                continue
+            
+            if nxt == 'u':
+                hex_part = text[i + 2 : i + 6]
+                if len(hex_part) == 4 and all(c in '0123456789abcdefABCDEF' for c in hex_part):
+                    builder.append('\\u' + hex_part)
+                    i += 6
+                    continue
+                builder.append('\\\\u')
+                i += 2
+                continue
+            
+            builder.append('\\\\')
+            i += 1
+            continue
+        
+        return ''.join(builder)
+    def _ensure_valid_unicode_sequences(self, text: str) -> str:
+        """Ensure control characters/newlines are properly escaped."""
+        # Replace raw carriage returns / tabs with escaped versions
+        text = text.replace('\r', '\\r').replace('\t', '\\t')
+        
+        # Ensure newlines inside strings are escaped
+        text = text.replace('\n', '\\n')
+        return text
+    def _enhance_math_slides(self, slides: List[Dict]) -> List[Dict]:
+        """Post-process math slides to ensure proper LaTeX formatting."""
+        
+        for slide in slides:
+            narration = slide.get("narration", "")
+            
+            # Only enhance if it contains math expressions
+            if any(c in narration for c in ['=', '+', '-', '×', '÷', '^', '/']):
+                
+                # Fix fractions: 5/3 -> $\frac{5}{3}$
+                narration = re.sub(
+                    r'(?<![\\$\w])(\d+)/(\d+)(?![\\$\w])', 
+                    r'$\\frac{\1}{\2}$', 
+                    narration
+                )
+                
+                # Fix exponents: x^2 -> x^{2}
+                narration = re.sub(r'\^(\d+)', r'^{\1}', narration)
+                
+                # Wrap standalone equations if not already wrapped
+                if '$' not in narration[:50]:  # Check if no $ in beginning
+                    narration = re.sub(
+                        r'\b([a-zA-Z])\s*=\s*([^.\n,]+)',
+                        r'$\1 = \2$',
+                        narration
+                    )
+                
+                slide["narration"] = narration
+            
+            # Process bullets
+            bullets = slide.get("bullets", [])
+            processed_bullets = []
+            for bullet in bullets:
+                if isinstance(bullet, str):
+                    # Add $ wrapping if contains = and no $ already
+                    if '=' in bullet and '$' not in bullet:
+                        bullet = f"${bullet}$"
+                    processed_bullets.append(bullet)
+            
+            if processed_bullets:
+                slide["bullets"] = processed_bullets
+        
+        return slides
     
     async def answer_question(
         self,
@@ -456,15 +676,26 @@ class GroqService:
     ) -> str | Dict[str, str] | Dict[str, Any]:
         """Answer questions or handle edit commands."""
         if not self.configured:
-            return "I understand your question. Please review the lecture materials."
+            return "Please review the lecture materials."
         
-        if is_edit_command:
-            return await self._handle_edit_command(question, context)
+        system_prompt = f"You are a teaching assistant. Answer in {language}. Be brief and clear."
+        user_prompt = f"Context: {context[:1000]}\n\nQuestion: {question}\n\nAnswer:"
         
-        return await self._handle_question(
-            question, context, language, script_instruction, 
-            question_language_hint, answer_type
-        )
+        try:
+            completion = await asyncio.to_thread(
+                self._client.chat.completions.create,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,
+                max_tokens=5000
+            )
+            
+            return completion.choices[0].message.content
+        except Exception:
+            return "I'm having trouble processing your question."
     
     async def _handle_edit_command(self, question: str, context: str) -> Dict[str, Any]:
         """Handle edit commands for slide content."""
@@ -583,16 +814,7 @@ class GroqService:
         duration: int,
         style: str,
     ) -> str:
-        """Create appropriate prompt based on content type."""
-        if detect_math_content(text):
-            print("🔢 Math content detected, using math prompt")
-            return create_math_lecture_prompt(
-                text=text,
-                language=language,
-                duration=duration,
-                style=style,
-            )
-        
+        """Create prompt with subject-aware guidance embedded."""
         return create_lecture_prompt(
             text=text,
             language=language,
@@ -643,20 +865,7 @@ class GroqService:
                 continue
             
             cleaned_bullets = [str(b).strip() for b in bullets if str(b).strip()]
-            # if not cleaned_bullets:
-            #     cleaned_bullets = [title]
-
-            
-            if not question:
-                question = "क्या आप इस विषय के बारे में और जानना चाहेंगे?"
-            
-            # normalized_slides.append({
-            #     "number": len(normalized_slides) + 1,
-            #     "title": title,
-            #     "bullets": cleaned_bullets[:3],
-            #     "narration": narration,
-            #     "question": question,
-            # })
+           
 
             slide_number = len(normalized_slides) + 1
             allow_bullets = slide_number in (2, 3)
@@ -680,6 +889,8 @@ class GroqService:
             estimated_duration = int(estimated)
         except (TypeError, ValueError):
             estimated_duration = len(normalized_slides) * 3
+
+        self._attach_subtopics_to_slides(normalized_slides)
         
         return {
             "slides": normalized_slides,
@@ -750,57 +961,9 @@ class GroqService:
                 slide_data["number"] = slide_number
                 slides.append(slide_data)
         
+        self._attach_subtopics_to_slides(slides)
         return {"slides": slides, "total_slides": len(slides), "estimated_duration": len(slides) * 3}
     
-    def _fill_missing_slides(
-        self,
-        *,
-        slides: List[Dict[str, Any]],
-        language: str,
-        duration: int,
-        text: str,
-    ) -> Optional[List[Dict[str, Any]]]:
-        """Fill missing slides with fallback."""
-        try:
-            fallback = generate_fallback_content(text=text, language=language, duration=duration)
-        except Exception:
-            return None
-        
-        fallback_slides = fallback.get("slides")
-        if not isinstance(fallback_slides, list) or len(fallback_slides) != 9:
-            return None
-        
-        completed = []
-        for index in range(9):
-            fallback_slide = fallback_slides[index]
-            existing_slide = slides[index] if index < len(slides) else None
-            
-            if existing_slide:
-                merged = {
-                    "number": index + 1,
-                    "title": existing_slide.get("title") or fallback_slide.get("title"),
-                    "bullets": existing_slide.get("bullets") or fallback_slide.get("bullets", []),
-                    "narration": existing_slide.get("narration") or fallback_slide.get("narration", ""),
-                    "question": existing_slide.get("question") or fallback_slide.get("question", ""),
-                }
-            else:
-                merged = {
-                    "number": index + 1,
-                    "title": fallback_slide.get("title"),
-                    "bullets": fallback_slide.get("bullets", []),
-                    "narration": fallback_slide.get("narration", ""),
-                    "question": fallback_slide.get("question", ""),
-                }
-            
-            if not merged.get("title") or not (merged.get("narration") or merged.get("question")):
-                return None
-            
-            if not merged.get("bullets"):
-                merged["bullets"] = [merged["title"]]
-            
-            completed.append(merged)
-        
-        return completed
     
     def _validate_language_mixing(self, parsed: Dict[str, Any], language: str) -> List[str]:
         """Validate Hindi/Gujarati content has proper English mixing and script usage."""
@@ -810,16 +973,14 @@ class GroqService:
             "आर्टिफिशियल इंटेलिजेंस": "Artificial Intelligence",
             "મશીન લર્નિંગ": "Machine Learning",
         }
-        # script_rules = {
-        #     "Hindi": {
-        #         "required": re.compile(r"[\u0900-\u097F]"),      # Devanagari
-        #         "forbidden": re.compile(r"[\u0A80-\u0AFF]"),    # Gujarati
-        #     },
-        #     "Gujarati": {
-        #         "required": re.compile(r"[\u0A80-\u0AFF]"),
-        #         "forbidden": re.compile(r"[\u0900-\u097F]"),
-        #     },
-        # }
+        script_rules = {
+            "Hindi": {
+                "forbidden": re.compile(r"[\u0A80-\u0AFF]"),    # Gujarati script
+            },
+            "Gujarati": {
+                "forbidden": re.compile(r"[\u0900-\u097F]"),    # Devanagari script
+            },
+        }
         
         slides = parsed.get("slides", [])
         for idx, slide in enumerate(slides):
@@ -828,6 +989,15 @@ class GroqService:
             narration = str(slide.get("narration", ""))
             # question = str(slide.get("question", ""))
             # combined_text = " ".join(filter(None, [title, narration, question]))
+            question = str(slide.get("question", ""))
+            combined_text = " ".join(filter(None, [title, narration, question]))
+            rules = script_rules.get(language)
+            if rules and combined_text:
+                forbidden_pattern = rules.get("forbidden")
+                if forbidden_pattern and forbidden_pattern.search(combined_text):
+                    errors.append(
+                        f"Slide {idx + 1}: Contains characters from a different Indian script than {language}"
+                    )
             
             for wrong, correct in forbidden_words.items():
                 if wrong in title or wrong in narration:
@@ -843,9 +1013,6 @@ class GroqService:
                 errors.append(
                     f"Slide {idx + 1}: Narration too short ({word_count} words, need {min_words}+)"
                 )
-            
-            # 
-            
         
         return errors
     
@@ -947,3 +1114,100 @@ class GroqService:
         if language == "Gujarati":
             return gujarati_fillers
         return english_fillers
+
+    def _attach_subtopics_to_slides(self, slides: List[Dict[str, Any]]) -> None:
+        """Add subnarrations for slides 4-7 directly from their narration.
+        NO subtopics field - only subnarrations."""
+        if not slides:
+            return
+
+        for idx, slide in enumerate(slides):
+            number = slide.get("number") or (idx + 1)
+            try:
+                slide_number = int(number)
+            except (TypeError, ValueError):
+                slide_number = idx + 1
+
+            # Remove any old subtopics field from ALL slides
+            slide.pop("subtopics", None)
+
+            # Add subnarrations ONLY for slides 4-7
+            if 4 <= slide_number <= 7:
+                narration = str(slide.get("narration", "")).strip()
+                slide_title = str(slide.get("title", "")).strip()
+                slide["subnarrations"] = self._extract_subnarrations_from_narration(
+                    narration=narration,
+                    slide_title=slide_title
+                )
+            else:
+                # Ensure no subnarrations for other slides
+                slide.pop("subnarrations", None)
+
+    
+    def _extract_subnarrations_from_narration(self, narration: str, slide_title: str) -> List[Dict[str, str]]:
+        """Extract ONE subnarration from narration (40-60 word summary).
+        Returns a list with exactly ONE subnarration object."""
+        
+        normalized = (narration or "").strip()
+        if not normalized:
+            return []
+
+        # Split into sentences
+        sentences = re.split(r'(?<=[.!?।])\s+', normalized)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if not sentences:
+            return []
+
+        # Take first 2-3 sentences for summary (approximately 40-60 words)
+        summary_sentences = sentences[:3]  # Take first 3 sentences
+        summary_text = " ".join(summary_sentences)
+        
+        # Ensure it's within 40-60 words
+        words = summary_text.split()
+        if len(words) > 60:
+            # Trim to approximately 50-60 words
+            summary_text = " ".join(words[:55])
+            # Try to end at sentence boundary
+            last_period = summary_text.rfind('.')
+            if last_period > 30:
+                summary_text = summary_text[:last_period + 1]
+        
+        # Return ONLY ONE subnarration
+        return [{
+            "title": slide_title,
+            "summary": summary_text.strip()
+        }]
+
+    @staticmethod
+    def _chunk_text(text: str, *, chunk_size: int = 120) -> List[str]:
+        """Chunk narration into word-based segments."""
+        words = text.split()
+        if not words:
+            return []
+
+        chunks: List[str] = []
+        for start in range(0, len(words), chunk_size):
+            chunk_words = words[start : start + chunk_size]
+            chunk_text = " ".join(chunk_words).strip()
+            if len(chunk_words) < 25 and chunks:
+                chunks[-1] = (chunks[-1] + " " + chunk_text).strip()
+            else:
+                chunks.append(chunk_text)
+
+        return [chunk for chunk in chunks if chunk]
+
+    @staticmethod
+    def _build_subtopic_title(block: str, index: int) -> str:
+        """Create a concise subtopic title from a narration block."""
+        if not block:
+            return f"Key Idea {index + 1}"
+
+        sentences = re.split(r"(?<=[.!?])\s+", block.strip())
+        candidate = sentences[0].strip() if sentences else block.strip()
+        words = candidate.split()
+
+        if len(words) > 12:
+            candidate = " ".join(words[:12]).rstrip(",;:-") + "..."
+
+        return candidate or f"Key Idea {index + 1}"

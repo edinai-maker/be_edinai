@@ -640,9 +640,6 @@ async def delete_lecture(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting lecture: {str(e)}"
         )
-        
-
-        
 @router.delete(
     "",
     response_model=Dict[str, Any],
@@ -684,12 +681,9 @@ async def bulk_delete_lectures(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting lectures: {exc}",
         )
-
-
 # ============================================================================
 # QUESTION & ANSWER ENDPOINTS
 # ============================================================================
-
 @router.post(
     "/ask",
     response_model=AnswerResponse,
@@ -742,12 +736,9 @@ async def ask_question(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing question: {str(e)}"
         )
-
-
 # ============================================================================
 # SLIDE MANAGEMENT ENDPOINTS
 # ============================================================================
-
 @router.get(
     "/{lecture_id}/slides/{slide_number}",
     summary="Get a specific slide",
@@ -789,8 +780,6 @@ async def get_slide(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving slide: {str(e)}"
         )
-
-
 @router.patch(
     "/{lecture_id}/slides/{slide_number}",
     summary="Update a slide",

@@ -897,57 +897,55 @@ def _fetch_filtered_lectures(
             if len(filtered) == 5:
                 break
         return filtered
+    base_query = db.query(LectureGen).filter(LectureGen.admin_id == admin_id)
 
-    def _topics_from_lecture_payload(payload: Optional[Dict[str, Any]]) -> List[str]:
-        if not isinstance(payload, dict):
-            return []
-        slides = payload.get("slides") or []
-        slide_titles: List[Optional[str]] = []
-        for slide in slides:
-            if isinstance(slide, dict):
-                slide_titles.append(slide.get("title"))
-        return _filter_topic_titles(slide_titles)
+    if std:
+        std_clean = std.strip().lower()
+        base_query = base_query.filter(func.lower(func.trim(LectureGen.std)) == std_clean)
+    if subject:
+        subject_clean = subject.strip().lower()
+        base_query = base_query.filter(func.lower(func.trim(LectureGen.subject)) == subject_clean)
+    if chapter:
+        chapter_clean = chapter.strip().lower()
+        base_query = base_query.filter(func.lower(func.trim(LectureGen.chapter_title)) == chapter_clean)
 
-    for (
-        material,
-        lecture_uid,
-        _chapter_title_from_row,
-        lecture_link,
-        lecture_created_at,
-        lecture_data,
-    ) in records:
-        topics_data: List[Dict[str, Any]] = []
-        extracted_chapter_title = None
+    records = base_query.order_by(desc(LectureGen.created_at)).all()
 
-        try:
-            payload, topics_list = read_topics_file_if_exists(material.admin_id, material.id)
-            if topics_list:
-                topics_data = topics_list[:5]
-            if payload and payload.get("chapter_title"):
-                extracted_chapter_title = payload.get("chapter_title")
-        except Exception:
-            topics_data = []
+    for record in records:
+        lecture_data_raw = record.lecture_data
+        lecture_data: Optional[Dict[str, Any]] = None
+        if isinstance(lecture_data_raw, dict):
+            lecture_data = lecture_data_raw
+        elif isinstance(lecture_data_raw, str):
+            try:
+                lecture_data = json.loads(lecture_data_raw)
+            except (json.JSONDecodeError, TypeError):
+                lecture_data = None
 
-        fallback_topics = _filter_topic_titles([
-            topic.get("title") if isinstance(topic, dict) else None for topic in topics_data
-        ])
 
-        lecture_topics = _topics_from_lecture_payload(lecture_data)
-        topic_titles = lecture_topics or fallback_topics
+        if not lecture_data:
+            continue
+
+        slides = lecture_data.get("slides") or []
+        if not isinstance(slides, list) or not slides:
+            continue
+
+        topic_titles = _filter_topic_titles(
+            [slide.get("title") if isinstance(slide, dict) else None for slide in slides]
+        )
         if not topic_titles:
             continue
 
         chapter_title = (
-            _chapter_title_from_row
-            or extracted_chapter_title
-            or material.chapter_title
-            or material.chapter_number
-            or ""
+            (record.chapter_title or "").strip()
+            or lecture_data.get("chapter_title")
+            or lecture_data.get("metadata", {}).get("chapter_title")
         )
 
         lecture_size = 0
-        thumbnail_url: Optional[str] = None
-        if lecture_link and lecture_uid:
+        thumbnail_url: Optional[str] = record.cover_photo_ur
+        lecture_uid = record.lecture_uid
+        if record.lecture_link and lecture_uid:
             try:
                 lecture_json_path = storage_base / lecture_uid / "lecture.json"
                 if lecture_json_path.exists():
@@ -964,38 +962,34 @@ def _fetch_filtered_lectures(
                 pass
 
         lecture_duration_minutes: Optional[int] = None
-        if isinstance(lecture_data, dict):
-            duration_candidates = [
-                lecture_data.get("estimated_duration"),
-                lecture_data.get("requested_duration"),
-                lecture_data.get("metadata", {}).get("duration"),
-            ]
-            for candidate in duration_candidates:
-                if candidate is not None:
-                    try:
-                        lecture_duration_minutes = int(candidate)
-                        break
-                    except (TypeError, ValueError):
-                        continue
-
-        resolved_lecture_id = str(lecture_uid or material.id)
-        admin_id_value = material.admin_id
+        duration_candidates = [
+            lecture_data.get("estimated_duration"),
+            lecture_data.get("requested_duration"),
+            lecture_data.get("metadata", {}).get("duration"),
+        ]
+        for candidate in duration_candidates:
+            if candidate is not None:
+                try:
+                    lecture_duration_minutes = int(candidate)
+                    break
+                except (TypeError, ValueError):
+                    continue
 
         effective_duration = lecture_duration_minutes or configured_default_duration
+        resolved_lecture_id = str(lecture_uid)
 
         items.append(
             {
                 "id": resolved_lecture_id,
                 "lecture_uid": resolved_lecture_id,
-                "lecture_uuid": resolved_lecture_id,
-                "admin_id": admin_id_value,
-                "material_id": material.id,
-                "lecture_link": lecture_link,
-                "std": material.std,
-                "subject": material.subject,
+                "admin_id": record.admin_id,
+                "material_id": record.material_id,
+                "lecture_link": record.lecture_link,
+                "std": record.std,
+                "subject": record.subject,
                 "chapter": chapter_title,
                 "topics": topic_titles,
-                "size": format_file_size(lecture_size or material.file_size or 0),
+                "size": format_file_size(lecture_size),
                 "video_duration_minutes": effective_duration,
                 "thumbnail_url": thumbnail_url or default_thumbnail_url,
             }
