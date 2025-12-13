@@ -602,14 +602,15 @@ async def list_lectures(
 
 @router.delete(
     "/{lecture_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=Dict[str, Any],
+    status_code=status.HTTP_200_OK,
     summary="Delete a lecture",
     description="Permanently delete a lecture and all its associated files"
 )
 async def delete_lecture(
     lecture_id: str,
     repository: LectureRepository = Depends(get_repository),
-) -> None:
+) -> Dict[str, Any]:
     """
     Delete a lecture permanently.
     - **lecture_id**: Lecture to delete
@@ -621,6 +622,17 @@ async def delete_lecture(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Lecture {lecture_id} not found"
             )
+
+        return {
+            "status": True,
+            "message": "Lectures deleted successfully",
+            "data": {
+                "deleted_count": 1,
+                "lectures": [
+                    {"lecture_id": lecture_id},
+                ],
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -628,6 +640,7 @@ async def delete_lecture(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting lecture: {str(e)}"
         )
+        
 
         
 @router.delete(
