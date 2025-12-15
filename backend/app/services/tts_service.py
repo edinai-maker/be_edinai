@@ -99,8 +99,9 @@ class GoogleTTSService:
     ) -> Optional[Path]:
         language_code, voice_name = voice
         try:
+            cleaned_text = self._sanitize_text(text)
             with open(target_path, "wb") as audio_file:
-                for chunk_text in self._chunk_text(text):
+                for chunk_text in self._chunk_text(cleaned_text):
                     response = self._client.synthesize_speech(
                         input=texttospeech.SynthesisInput(text=chunk_text),
                         voice=texttospeech.VoiceSelectionParams(
@@ -153,6 +154,37 @@ class GoogleTTSService:
         }
         return mapping.get(language, ("en-in", "en-IN-Chirp3-HD-Achernar"))
 
+    def _sanitize_text(self, text: str) -> str:
+        """Remove problematic Unicode characters and normalize text for TTS."""
+        if not text:
+            return text
+        
+        result = []
+        for char in text:
+            code_point = ord(char)
+            
+            if char.isspace() or char.isalnum():
+                result.append(char)
+            elif char in '.,!?;:\'"()-':
+                result.append(char)
+            elif code_point < 128:
+                result.append(char)
+            elif 0x0900 <= code_point <= 0x097F:
+                result.append(char)
+            elif 0x0A80 <= code_point <= 0x0AFF:
+                result.append(char)
+            elif 0x0B00 <= code_point <= 0x0B7F:
+                result.append(char)
+            elif code_point in (0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D):
+                result.append(char)
+            else:
+                result.append(' ')
+        
+        sanitized = ''.join(result)
+        sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+        
+        return sanitized
+
     def _chunk_text(self, text: str) -> Iterator[str]:
         normalized = text.strip()
         if len(normalized) <= self._CHUNK_CHAR_LIMIT:
@@ -173,8 +205,8 @@ class GoogleTTSService:
                     yield " ".join(current_chunk)
                     current_chunk = []
                     current_length = 0
-                for start in range(0, len(sentence), self._CHUNK_CHAR_LIMIT):
-                    yield sentence[start : start + self._CHUNK_CHAR_LIMIT]
+                for split_part in self._split_long_sentence(sentence):
+                    yield split_part
                 continue
 
             additional_length = len(sentence) + (1 if current_chunk else 0)
@@ -188,3 +220,33 @@ class GoogleTTSService:
 
         if current_chunk:
             yield " ".join(current_chunk)
+
+    def _split_long_sentence(self, sentence: str) -> Iterator[str]:
+        """Split a long sentence at natural breaking points (commas, conjunctions)."""
+        max_length = 500
+        
+        if len(sentence) <= max_length:
+            yield sentence
+            return
+        
+        parts = re.split(r'(?<=[,;])\s+', sentence)
+        current_part: list[str] = []
+        current_length = 0
+        
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            
+            additional_length = len(part) + (1 if current_part else 0)
+            if current_length + additional_length <= max_length:
+                current_part.append(part)
+                current_length += additional_length
+            else:
+                if current_part:
+                    yield " ".join(current_part)
+                current_part = [part]
+                current_length = len(part)
+        
+        if current_part:
+            yield " ".join(current_part)
