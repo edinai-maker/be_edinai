@@ -82,6 +82,7 @@ async def create_lecture(
             material_id=material_value,
         )
     lecture_id = lecture_uid or reuse_lecture_uid or await _generate_lecture_id()
+    created_at = datetime.utcnow()
 
     record: Dict[str, Any] = {
         "lecture_id": lecture_id,
