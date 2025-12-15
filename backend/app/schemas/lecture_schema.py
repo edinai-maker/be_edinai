@@ -81,7 +81,7 @@ class SharedLectureSummary(BaseModel):
     subject: Optional[str] = None
     lecture_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
-    lecture_url: Optional[str] = None
+    duration_seconds: Optional[int] = None
     last_shared_at: Optional[datetime] = None
 
 class AnswerResponse(BaseModel):
