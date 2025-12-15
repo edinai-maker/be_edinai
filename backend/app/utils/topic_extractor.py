@@ -7,19 +7,17 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from groq import Groq
+
 try:
     from app.services.vision_ocr_service import (
         get_vision_service,
-
         is_vision_api_enabled,
-
     )
     VISION_API_AVAILABLE = True
-
 except (ModuleNotFoundError, ImportError):
-
     VISION_API_AVAILABLE = False
+
+from groq import Groq
 
 try:
     import pytesseract
@@ -68,7 +66,6 @@ logger = logging.getLogger("uvicorn.error").getChild("topic_extractor")
 
 DEFAULT_OCR_LANGUAGE = os.getenv("DEFAULT_OCR_LANGUAGE", "")
 GROQ_MODEL = os.getenv("GROQ_TOPIC_MODEL", "openai/gpt-oss-120b")
-
 GROQ_BACKUP_MODEL = os.getenv("GROQ_BACKUP_MODEL", "openai/gpt-oss-safeguard-20b")
 MAX_INPUT_CHARS = int(os.getenv("GROQ_PROMPT_CHAR_LIMIT", "9000"))
 GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "6000"))
@@ -135,6 +132,7 @@ GENERIC_TOPIC_TITLES = {
 
 PAGE_MARKER_PATTERN = re.compile(r"\n--- Page (?P<number>\d+) ---\n")
 
+
 def _select_supported_language(code: Optional[str]) -> Optional[str]:
     if not code:
         return None
@@ -184,23 +182,6 @@ def _guess_language_by_script(text: str) -> Optional[str]:
     return best_code
 
 
-def _guess_language_by_highest_ratio(text: str) -> Optional[str]:
-    stripped = text.strip()
-    if not stripped:
-        return None
-
-    best_code: Optional[str] = None
-    best_ratio = 0.0
-
-    for code, spec in LANGUAGE_SPECS.items():
-        ratio = _script_ratio(stripped, pattern=spec["script_pattern"])
-        if ratio > best_ratio:
-            best_code = code
-            best_ratio = ratio
-
-    return best_code if best_ratio > 0.0 else None
-
-
 def read_pdf(pdf_path: Path) -> str:
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
@@ -242,6 +223,7 @@ def _prepare_model_input(text: str, *, spec: Dict[str, Any]) -> str:
     filtered = _filter_text_by_language(text, spec=spec)
     candidate = filtered or text
     return _prepare_excerpt(candidate, limit=MAX_INPUT_CHARS)
+
 
 def _build_page_marker(page_number: Optional[int]) -> str:
     if page_number is None:
@@ -294,6 +276,7 @@ def _normalize_topic_title(title: str) -> str:
     cleaned = re.sub(r"[\s\-–—:•]+", " ", (title or "").strip())
     return cleaned.casefold()
 
+
 def _normalize_narration(text: str) -> str:
     return _normalize_whitespace(text).casefold()
 
@@ -311,6 +294,7 @@ def _merge_summary_text(existing: str, new: str) -> str:
         return existing_clean
 
     return f"{existing_clean} {new_clean}".strip()
+
 
 def _merge_subtopic_lists(
     existing: Optional[List[Dict[str, Any]]],
@@ -386,6 +370,7 @@ def _merge_topic_lists(
                 index[key] = len(merged) - 1
 
     return merged
+
 
 def _render_topics_output(topics: List[Dict[str, Any]]) -> str:
     lines: List[str] = []
@@ -558,7 +543,6 @@ def stream_topics_from_text(
     last_error = None
 
     for model in models_to_try:
-
         try:
             logger.info("Attempting topic extraction with model: %s", model)
             completion = client.chat.completions.create(
@@ -570,7 +554,7 @@ def stream_topics_from_text(
             
             if not completion.choices:
                 raise RuntimeError("No response received from GROQ topic extraction.")
-            
+
             content = (completion.choices[0].message.content or "").strip()
             headings = extract_numbered_headings(content)
             
@@ -586,6 +570,7 @@ def stream_topics_from_text(
             if model == models_to_try[-1]:
                 raise RuntimeError(f"GROQ topic extraction failed with all models: {last_error}") from last_error
             logger.info("Retrying with backup model: %s", models_to_try[models_to_try.index(model) + 1])
+
 
 def detect_ocr_language_with_pytesseract(pdf_path: Path) -> Optional[str]:
     if pytesseract is None or convert_from_path is None:
@@ -655,10 +640,6 @@ def detect_dominant_language(text: str) -> Optional[str]:
 
 
 def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
-    """
-    Run OCRmyPDF once and return the sidecar text if available.
-    Tuned for speed: optimize=0, no multiple passes.
-    """
     if ocrmypdf is None:
         raise RuntimeError("ocrmypdf is required. Install it with 'pip install ocrmypdf'.")
 
@@ -674,10 +655,10 @@ def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
                 sidecar=str(sidecar_text),
                 force_ocr=True,
                 language=ocr_language,
-                progress_bar=False,
+                progress_bar=False,  # progress bar / extra output band
                 rotate_pages=True,
                 deskew=True,
-                optimize=0,  # ⚡ speed: heavy optimization band
+                # oversample=300,  # OPTIONAL: DPI normalize karne ke liye, chaho to uncomment karo
             )
         except OCRMissingDependencyError as exc:
             raise RuntimeError(
@@ -710,15 +691,9 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
     """
     Prefer embedded PDF text first (fast + clean),
     and only fall back to OCR when needed.
-
-    ⚡ Optimized:
-    - OCRmyPDF sirf *ek baar* run hota hai.
-    - Pehle language guess karte hain, par multiple language loops nahi.
     """
 
-    # pdf_path = Path(pdf_path)
-
-    # 1) Try normal text extraction first
+    # 1) Try normal text extraction first (jaise local me ho raha tha)
     try:
         raw_text = read_pdf(pdf_path)
     except Exception as exc:
@@ -731,13 +706,12 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
         return raw_text, detected_language
 
     logger.info(
-        "Embedded text empty for %s; falling back to OCR with ocrmypdf (single pass).",
+        "Embedded text empty for %s; falling back to OCR with ocrmypdf.",
         pdf_path.name,
     )
 
-    # 2) Decide which OCR language(s) to use
+    # 2) Agar embedded text nahi mila, tab hi OCR use karo
     def _run_ocr(lang_code: str) -> str:
-
         try:
             # map internal lang code -> tesseract code
             lang_map = {
@@ -750,6 +724,7 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
         except RuntimeError as exc:  # ocrmypdf / deps issue
             logger.warning("OCR failed for %s using %s: %s", pdf_path.name, lang_code, exc)
             return ""
+
     detected_osd_language = detect_ocr_language_with_pytesseract(pdf_path)
     candidate_order: List[str] = []
     if detected_osd_language:
@@ -804,9 +779,8 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
         logger.info("OCR attempts did not produce text for %s; returning empty.", pdf_path.name)
         return "", None
 
-    # 4) Detect language from OCR text (no more OCR runs)
     detected_language = detect_dominant_language(ocr_text)
-    logger.info("Final Detected Language (after OCR): %s", pdf_path.name, detected_language)
+    logger.info("Final Detected Language (after OCR): %s", detected_language)
 
     if detected_language and detected_language != ocr_language_used:
         refined = _run_ocr(detected_language)
@@ -816,6 +790,8 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
 
     final_language = detected_language or ocr_language_used
     return ocr_text, final_language
+
+
 
 def extract_text_with_vision_api(pdf_path: Path) -> Tuple[str, Optional[str]]:
     """
@@ -859,7 +835,7 @@ def extract_text_with_vision_api(pdf_path: Path) -> Tuple[str, Optional[str]]:
             pdf_path,
             language_hints=language_hints
         )
-    
+
         pages_detail = result.get("pages") or []
         if pages_detail:
             extracted_text = _compose_text_from_pages(pages_detail)
@@ -894,6 +870,7 @@ def extract_text_with_vision_api(pdf_path: Path) -> Tuple[str, Optional[str]]:
         logger.info("Falling back to standard OCR method")
         # Fall back to the standard method
         return extract_text_with_auto_language(pdf_path)
+
     
 def detect_pdf_language(pdf_path: Path) -> Dict[str, str]:
     """Detect the probable language code/label for the given PDF without OCR."""
@@ -1130,26 +1107,13 @@ def extract_topics_from_pdf(pdf_path: Path) -> Dict[str, Any]:
         logger.info("No numbered chapter headings found in PDF")
 
     if not language_code:
-        # Re-run language detection on the aggregated PDF text before falling back.
-        language_code = detect_dominant_language(pdf_text)
-
-    if not language_code:
-        language_code = _guess_language_by_highest_ratio(pdf_text)
-
-    if not language_code:
-        fallback_language = _select_supported_language(DEFAULT_OCR_LANGUAGE)
-        if fallback_language:
-            logger.warning(
-                "Language detection failed for %s; falling back to configured default %s for topic extraction.",
-                pdf_path.name,
-                fallback_language,
-            )
-            language_code = fallback_language
-
-    if not language_code:
-        raise RuntimeError(
-            "Unable to determine language for topic extraction. Provide a DEFAULT_OCR_LANGUAGE or ensure the document contains detectable text."
+        fallback_language = _select_supported_language(DEFAULT_OCR_LANGUAGE) or "eng"
+        logger.warning(
+            "Language detection failed for %s; falling back to %s for topic extraction.",
+            pdf_path.name,
+            fallback_language,
         )
+        language_code = fallback_language
 
     language_spec = _get_language_spec(language_code)
     logger.info(
@@ -1184,7 +1148,9 @@ def extract_topics_from_pdf(pdf_path: Path) -> Dict[str, Any]:
     aggregated_topics: List[Dict[str, Any]] = []
     aggregated_headings: List[Tuple[str, str]] = []
     chunk_summaries: List[Dict[str, Any]] = []
+
     spec = language_spec
+
     for chunk in page_chunks:
         chunk_text = (chunk.get("text") or "").strip()
         if not chunk_text:
@@ -1263,7 +1229,6 @@ def extract_topics_from_pdf(pdf_path: Path) -> Dict[str, Any]:
 
     llm_headings = final_headings
     chapter_titles_llm = [title.strip() for _, title in llm_headings if title.strip()]
-
     merged_chapter_titles = _merge_unique_titles(chapter_titles_llm, chapter_titles)
     chapter_titles = merged_chapter_titles or chapter_titles
     if chapter_titles:
