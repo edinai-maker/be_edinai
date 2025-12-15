@@ -68,7 +68,10 @@ logger = logging.getLogger("uvicorn.error").getChild("topic_extractor")
 
 DEFAULT_OCR_LANGUAGE = os.getenv("DEFAULT_OCR_LANGUAGE", "")
 GROQ_MODEL = os.getenv("GROQ_TOPIC_MODEL", "openai/gpt-oss-120b")
-MAX_INPUT_CHARS = 15_000
+GROQ_BACKUP_MODEL = os.getenv("GROQ_BACKUP_MODEL", "openai/gpt-oss-safeguard-20b")
+MAX_INPUT_CHARS = int(os.getenv("GROQ_PROMPT_CHAR_LIMIT", "9000"))
+GROQ_MAX_COMPLETION_TOKENS = int(os.getenv("GROQ_MAX_COMPLETION_TOKENS", "6000"))
+TOPIC_PAGES_PER_CHUNK = int(os.getenv("TOPIC_PAGES_PER_CHUNK", "5"))
 TOPIC_EXTRACTION_PROMPT_TEMPLATE = (
     "Read the PDF and answer in  {language_label}. "
     "do not give me answer outof pdf and topic and subtopic."
@@ -127,6 +130,8 @@ GENERIC_TOPIC_TITLES = {
     "list of topics",
 }
 
+PAGE_MARKER_PATTERN = re.compile(r"\n--- Page (?P<number>\d+) ---\n")
+PAGE_MARKER_PATTERN = re.compile(r"\n--- Page (?P<number>\d+) ---\n")
 
 def _select_supported_language(code: Optional[str]) -> Optional[str]:
     if not code:
@@ -212,12 +217,460 @@ def _prepare_excerpt(text: str, limit: int = MAX_INPUT_CHARS) -> str:
     if len(text) <= limit:
         return text
     return text[:limit]
+def _build_page_marker(page_number: Optional[int]) -> str:
+    if page_number is None:
+        return "\n--- Page ? ---\n"
+    return f"\n--- Page {page_number} ---\n"
 
 
+def _append_page_segment(
+    page_segments: List[str],
+    page_number: Optional[int],
+    text: str,
+) -> None:
+    normalized = (text or "").strip()
+    if not normalized:
+        return
+    marker = _build_page_marker(page_number)
+    page_segments.append(f"{marker}{normalized}")
+
+
+def _compose_text_from_pages(pages: List[Dict[str, Any]]) -> str:
+    segments: List[str] = []
+    for page in pages:
+        page_num = page.get("page_number")
+        page_text = page.get("text", "")
+        _append_page_segment(segments, page_num, page_text)
+    return "\n".join(segments)
+def _vision_pages_to_text(vision_result: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
+    pages_info: List[Dict[str, Any]] = []
+    for entry in vision_result.get("pages", []):
+        page_number = entry.get("page_number")
+        page_text = entry.get("text", "")
+        page_confidence = entry.get("confidence", 0.0)
+        pages_info.append({
+            "page_number": page_number,
+            "text": page_text,
+            "confidence": page_confidence,
+        })
+
+    combined_text = _compose_text_from_pages(pages_info)
+    return combined_text, pages_info
+
+
+def _normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def _normalize_topic_title(title: str) -> str:
+    cleaned = re.sub(r"[\s\-–—:•]+", " ", (title or "").strip())
+    return cleaned.casefold()
+
+
+def _normalize_narration(text: str) -> str:
+    return _normalize_whitespace(text).casefold()
+
+
+def _merge_summary_text(existing: str, new: str) -> str:
+    existing_clean = _normalize_whitespace(existing)
+    new_clean = _normalize_whitespace(new)
+
+    if not existing_clean:
+        return new_clean
+    if not new_clean:
+        return existing_clean
+
+    if new_clean.casefold() in existing_clean.casefold():
+        return existing_clean
+
+    return f"{existing_clean} {new_clean}".strip()
+def _merge_subtopic_lists(
+    existing: Optional[List[Dict[str, Any]]],
+    new: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str]] = set()
+    def _add(item: Dict[str, Any]) -> None:
+        title = _normalize_whitespace(item.get("title", ""))
+        narration = _normalize_whitespace(item.get("narration", ""))
+        key = (_normalize_topic_title(title), _normalize_narration(narration))
+        if key in seen:
+            return
+        seen.add(key)
+        merged.append({
+            "title": title,
+            "narration": narration,
+        })
+    for entry in existing or []:
+        _add(entry)
+    for entry in new or []:
+        _add(entry)
+    return merged
+def _merge_topic_lists(
+    existing: Optional[List[Dict[str, Any]]],
+    new: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    index: Dict[str, int] = {}
+    for topic in existing or []:
+        title = _normalize_whitespace(topic.get("title", ""))
+        summary = _normalize_whitespace(topic.get("summary", ""))
+        subtopics = _merge_subtopic_lists(topic.get("subtopics"), None)
+        merged_topic = {
+            "title": title,
+            "summary": summary,
+            "subtopics": subtopics,
+        }
+        key = _normalize_topic_title(title)
+        if key:
+            index[key] = len(merged)
+        merged.append(merged_topic)
+    for topic in new or []:
+        title = _normalize_whitespace(topic.get("title", ""))
+        summary = _normalize_whitespace(topic.get("summary", ""))
+        subtopics = _merge_subtopic_lists(None, topic.get("subtopics"))
+        if not title and not summary and not subtopics:
+            continue
+        key = _normalize_topic_title(title)
+        if key and key in index:
+            existing_topic = merged[index[key]]
+            existing_topic["summary"] = _merge_summary_text(existing_topic.get("summary", ""), summary)
+            existing_topic["subtopics"] = _merge_subtopic_lists(existing_topic.get("subtopics"), subtopics)
+        else:
+            merged_topic = {
+                "title": title,
+                "summary": summary,
+                "subtopics": subtopics,
+            }
+            merged.append(merged_topic)
+            if key:
+                index[key] = len(merged) - 1
+    return merged
+def _render_topics_output(topics: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for idx, topic in enumerate(topics, start=1):
+        title = _normalize_whitespace(topic.get("title", ""))
+        summary = _normalize_whitespace(topic.get("summary", ""))
+        subtopics = topic.get("subtopics", []) or []
+        if not title and not summary and not subtopics:
+            continue
+        lines.append(f"{idx}. {title or 'Topic'}")
+        if subtopics:
+            if summary:
+                lines.append(summary)
+            for subtopic in subtopics:
+                sub_title = _normalize_whitespace(subtopic.get("title", ""))
+                sub_narration = _normalize_whitespace(subtopic.get("narration", ""))
+                if sub_title and sub_narration:
+                    lines.append(f"- {sub_title}: {sub_narration}")
+                elif sub_title:
+                    lines.append(f"- {sub_title}")
+                elif sub_narration:
+                    lines.append(f"- {sub_narration}")
+        elif summary:
+            lines.append(summary)
+    return "\n".join(lines).strip()
+def _split_pdf_text_into_pages(pdf_text: str) -> List[Dict[str, Any]]:
+    if not pdf_text.strip():
+        return []
+    matches = list(PAGE_MARKER_PATTERN.finditer(pdf_text))
+    pages: List[Dict[str, Any]] = []
+    if not matches:
+        cleaned = pdf_text.strip()
+        if cleaned:
+            pages.append({
+                "page": None,
+                "text": cleaned,
+            })
+        return pages
+    for index, match in enumerate(matches):
+        page_number = match.group("number")
+        try:
+            page_int = int(page_number)
+        except (TypeError, ValueError):
+            page_int = None
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(pdf_text)
+        segment = pdf_text[start:end].strip()
+        if not segment:
+            continue
+        pages.append({
+            "page": page_int,
+            "text": segment,
+        })
+    return pages
+def _group_pages_into_chunks(
+    pages: List[Dict[str, Any]],
+    pages_per_chunk: int,
+) -> List[Dict[str, Any]]:
+    if not pages:
+        return []
+    if pages_per_chunk <= 0:
+        pages_per_chunk = 5
+    chunks: List[Dict[str, Any]] = []
+
+    for idx in range(0, len(pages), pages_per_chunk):
+        subset = pages[idx: idx + pages_per_chunk]
+        if not subset:
+            continue
+        start_page = subset[0].get("page")
+        end_page = subset[-1].get("page")
+        combined_text = "\n\n".join(item.get("text", "") for item in subset if item.get("text"))
+        chunks.append({
+            "chunk_index": len(chunks) + 1,
+            "start_page": start_page,
+            "end_page": end_page,
+            "text": combined_text,
+            "pages": subset,
+        })
+
+    return chunks
 def _prepare_model_input(text: str, *, spec: Dict[str, Any]) -> str:
     filtered = _filter_text_by_language(text, spec=spec)
     candidate = filtered or text
     return _prepare_excerpt(candidate, limit=MAX_INPUT_CHARS)
+
+def _build_page_marker(page_number: Optional[int]) -> str:
+    if page_number is None:
+        return "\n--- Page ? ---\n"
+    return f"\n--- Page {page_number} ---\n"
+
+
+def _append_page_segment(
+    page_segments: List[str],
+    page_number: Optional[int],
+    text: str,
+) -> None:
+    normalized = (text or "").strip()
+    if not normalized:
+        return
+    marker = _build_page_marker(page_number)
+    page_segments.append(f"{marker}{normalized}")
+
+
+def _compose_text_from_pages(pages: List[Dict[str, Any]]) -> str:
+    segments: List[str] = []
+    for page in pages:
+        page_num = page.get("page_number")
+        page_text = page.get("text", "")
+        _append_page_segment(segments, page_num, page_text)
+    return "\n".join(segments)
+
+
+def _vision_pages_to_text(vision_result: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]]]:
+    pages_info: List[Dict[str, Any]] = []
+    for entry in vision_result.get("pages", []):
+        page_number = entry.get("page_number")
+        page_text = entry.get("text", "")
+        page_confidence = entry.get("confidence", 0.0)
+        pages_info.append({
+            "page_number": page_number,
+            "text": page_text,
+            "confidence": page_confidence,
+        })
+
+    combined_text = _compose_text_from_pages(pages_info)
+    return combined_text, pages_info
+
+
+def _normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def _normalize_topic_title(title: str) -> str:
+    cleaned = re.sub(r"[\s\-–—:•]+", " ", (title or "").strip())
+    return cleaned.casefold()
+
+def _normalize_narration(text: str) -> str:
+    return _normalize_whitespace(text).casefold()
+
+
+def _merge_summary_text(existing: str, new: str) -> str:
+    existing_clean = _normalize_whitespace(existing)
+    new_clean = _normalize_whitespace(new)
+
+    if not existing_clean:
+        return new_clean
+    if not new_clean:
+        return existing_clean
+
+    if new_clean.casefold() in existing_clean.casefold():
+        return existing_clean
+
+    return f"{existing_clean} {new_clean}".strip()
+
+def _merge_subtopic_lists(
+    existing: Optional[List[Dict[str, Any]]],
+    new: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str]] = set()
+
+    def _add(item: Dict[str, Any]) -> None:
+        title = _normalize_whitespace(item.get("title", ""))
+        narration = _normalize_whitespace(item.get("narration", ""))
+        key = (_normalize_topic_title(title), _normalize_narration(narration))
+        if key in seen:
+            return
+        seen.add(key)
+        merged.append({
+            "title": title,
+            "narration": narration,
+        })
+
+    for entry in existing or []:
+        _add(entry)
+
+    for entry in new or []:
+        _add(entry)
+
+    return merged
+
+
+def _merge_topic_lists(
+    existing: Optional[List[Dict[str, Any]]],
+    new: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    index: Dict[str, int] = {}
+
+    for topic in existing or []:
+        title = _normalize_whitespace(topic.get("title", ""))
+        summary = _normalize_whitespace(topic.get("summary", ""))
+        subtopics = _merge_subtopic_lists(topic.get("subtopics"), None)
+        merged_topic = {
+            "title": title,
+            "summary": summary,
+            "subtopics": subtopics,
+        }
+        key = _normalize_topic_title(title)
+        if key:
+            index[key] = len(merged)
+        merged.append(merged_topic)
+
+    for topic in new or []:
+        title = _normalize_whitespace(topic.get("title", ""))
+        summary = _normalize_whitespace(topic.get("summary", ""))
+        subtopics = _merge_subtopic_lists(None, topic.get("subtopics"))
+
+        if not title and not summary and not subtopics:
+            continue
+
+        key = _normalize_topic_title(title)
+
+        if key and key in index:
+            existing_topic = merged[index[key]]
+            existing_topic["summary"] = _merge_summary_text(existing_topic.get("summary", ""), summary)
+            existing_topic["subtopics"] = _merge_subtopic_lists(existing_topic.get("subtopics"), subtopics)
+        else:
+            merged_topic = {
+                "title": title,
+                "summary": summary,
+                "subtopics": subtopics,
+            }
+            merged.append(merged_topic)
+            if key:
+                index[key] = len(merged) - 1
+
+    return merged
+
+def _render_topics_output(topics: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+
+    for idx, topic in enumerate(topics, start=1):
+        title = _normalize_whitespace(topic.get("title", ""))
+        summary = _normalize_whitespace(topic.get("summary", ""))
+        subtopics = topic.get("subtopics", []) or []
+
+        if not title and not summary and not subtopics:
+            continue
+
+        lines.append(f"{idx}. {title or 'Topic'}")
+
+        if subtopics:
+            if summary:
+                lines.append(summary)
+            for subtopic in subtopics:
+                sub_title = _normalize_whitespace(subtopic.get("title", ""))
+                sub_narration = _normalize_whitespace(subtopic.get("narration", ""))
+                if sub_title and sub_narration:
+                    lines.append(f"- {sub_title}: {sub_narration}")
+                elif sub_title:
+                    lines.append(f"- {sub_title}")
+                elif sub_narration:
+                    lines.append(f"- {sub_narration}")
+        elif summary:
+            lines.append(summary)
+
+    return "\n".join(lines).strip()
+
+
+def _split_pdf_text_into_pages(pdf_text: str) -> List[Dict[str, Any]]:
+    if not pdf_text.strip():
+        return []
+
+    matches = list(PAGE_MARKER_PATTERN.finditer(pdf_text))
+    pages: List[Dict[str, Any]] = []
+
+    if not matches:
+        cleaned = pdf_text.strip()
+        if cleaned:
+            pages.append({
+                "page": None,
+                "text": cleaned,
+            })
+        return pages
+
+    for index, match in enumerate(matches):
+        page_number = match.group("number")
+        try:
+            page_int = int(page_number)
+        except (TypeError, ValueError):
+            page_int = None
+
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(pdf_text)
+        segment = pdf_text[start:end].strip()
+        if not segment:
+            continue
+        pages.append({
+            "page": page_int,
+            "text": segment,
+        })
+
+    return pages
+
+
+def _group_pages_into_chunks(
+    pages: List[Dict[str, Any]],
+    pages_per_chunk: int,
+) -> List[Dict[str, Any]]:
+    if not pages:
+        return []
+
+    if pages_per_chunk <= 0:
+        pages_per_chunk = 5
+
+    chunks: List[Dict[str, Any]] = []
+
+    for idx in range(0, len(pages), pages_per_chunk):
+        subset = pages[idx: idx + pages_per_chunk]
+        if not subset:
+            continue
+
+        start_page = subset[0].get("page")
+        end_page = subset[-1].get("page")
+        combined_text = "\n\n".join(item.get("text", "") for item in subset if item.get("text"))
+
+        chunks.append({
+            "chunk_index": len(chunks) + 1,
+            "start_page": start_page,
+            "end_page": end_page,
+            "text": combined_text,
+            "pages": subset,
+        })
+
+    return chunks
 
 
 def _build_topic_prompt(language_label: str) -> str:
@@ -288,29 +741,65 @@ def stream_topics_from_text(
         {"role": "user", "content": model_input},
     ]
 
-    try:
-        completion = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=0.2,
-            max_completion_tokens=12000,
-        )
-    except Exception as exc:  # pragma: no cover - network dependency
-        raise RuntimeError(f"GROQ topic extraction failed: {exc}") from exc
-
-    if not completion.choices:
-        raise RuntimeError("No response received from GROQ topic extraction.")
-
-    content = (completion.choices[0].message.content or "").strip()
-    headings = extract_numbered_headings(content)
-
-    return {
-        "content": content,
-        "headings": headings,
-        "language_label": language_label,
-    }
+    models_to_try = [GROQ_MODEL, GROQ_BACKUP_MODEL]
+    last_error = None
 
 
+    for model in models_to_try:
+
+        try:
+
+            logger.info("Attempting topic extraction with model: %s", model)
+
+            completion = client.chat.completions.create(
+
+                model=model,
+
+                messages=messages,
+
+                temperature=0.2,
+
+                max_completion_tokens=GROQ_MAX_COMPLETION_TOKENS,
+
+            )
+
+            
+
+            if not completion.choices:
+
+                raise RuntimeError("No response received from GROQ topic extraction.")
+
+
+
+            content = (completion.choices[0].message.content or "").strip()
+
+            headings = extract_numbered_headings(content)
+
+            
+
+            logger.info("Topic extraction successful with model: %s", model)
+
+            return {
+
+                "content": content,
+
+                "headings": headings,
+
+                "language_label": language_label,
+
+            }
+
+        except Exception as exc:  # pragma: no cover - network dependency
+
+            last_error = exc
+
+            logger.warning("Topic extraction failed with model %s: %s", model, exc)
+
+            if model == models_to_try[-1]:
+
+                raise RuntimeError(f"GROQ topic extraction failed with all models: {last_error}") from last_error
+
+            logger.info("Retrying with backup model: %s", models_to_try[models_to_try.index(model) + 1])
 def detect_ocr_language_with_pytesseract(pdf_path: Path) -> Optional[str]:
     if pytesseract is None or convert_from_path is None:
         return None
@@ -440,7 +929,7 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
     - Pehle language guess karte hain, par multiple language loops nahi.
     """
 
-    pdf_path = Path(pdf_path)
+    # pdf_path = Path(pdf_path)
 
     # 1) Try normal text extraction first
     try:
@@ -459,49 +948,99 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
         pdf_path.name,
     )
 
-    # 2) Decide which OCR language(s) to use
+
+    # 2) Agar embedded text nahi mila, tab hi OCR use karo
+
+    def _run_ocr(lang_code: str) -> str:
+
+        try:
+
+            # map internal lang code -> tesseract code
+
+            lang_map = {
+
+                "eng": "eng",
+
+                "hin": "hin",
+
+                "guj": "guj",
+
+            }
+
+            ocr_language = lang_map.get(lang_code, "eng+hin+guj")
+
+            return read_pdf_with_ocrmypdf(pdf_path, ocr_language=ocr_language)
+
+        except RuntimeError as exc:  # ocrmypdf / deps issue
+
+            logger.warning("OCR failed for %s using %s: %s", pdf_path.name, lang_code, exc)
+
+            return ""
     detected_osd_language = detect_ocr_language_with_pytesseract(pdf_path)
+    candidate_order: List[str] = []
+    if detected_osd_language:
+        candidate_order.append(detected_osd_language)
+
     default_language = _select_supported_language(DEFAULT_OCR_LANGUAGE)
+    if default_language and default_language not in candidate_order:
+        candidate_order.append(default_language)
 
-    internal_code: Optional[str] = detected_osd_language or default_language
+    for code in LANGUAGE_SPECS.keys():
+        if code not in candidate_order:
+            candidate_order.append(code)
 
-    lang_map = {
-        "eng": "eng",
-        "hin": "hin",
-        "guj": "guj",
-    }
+    ocr_text = ""
+    ocr_language_used: Optional[str] = None
+    best_attempt_text = ""
+    best_attempt_language: Optional[str] = None
+    best_attempt_ratio = 0.0
 
-    if internal_code in lang_map:
-        ocr_language = lang_map[internal_code]
-        logger.info(
-            "Running OCRmyPDF for %s using single language model: %s",
-            pdf_path.name,
-            ocr_language,
-        )
-    else:
-        ocr_language = "+".join(lang_map.values())  # "eng+hin+guj"
-        logger.info(
-            "No strong language guess for %s; running OCRmyPDF with combined languages: %s",
-            pdf_path.name,
-            ocr_language,
-        )
+    for candidate in candidate_order:
+        attempt = _run_ocr(candidate)
+        if not attempt.strip():
+            continue
 
-    # 3) Single OCR pass
-    try:
-        ocr_text = read_pdf_with_ocrmypdf(pdf_path, ocr_language=ocr_language)
-    except RuntimeError as exc:
-        logger.warning("OCR failed for %s: %s", pdf_path.name, exc)
-        return "", None
+        spec = LANGUAGE_SPECS.get(candidate)
+        ratio = 0.0
+        if spec:
+            ratio = _script_ratio(attempt, pattern=spec["script_pattern"])
+            if ratio < float(spec["min_ratio"]):
+                if ratio > best_attempt_ratio:
+                    best_attempt_text = attempt
+                    best_attempt_language = candidate
+                    best_attempt_ratio = ratio
+                logger.info(
+                    "OCR text for %s using %s model did not meet required script ratio (%.2f < %.2f); trying next candidate.",
+                    pdf_path.name,
+                    candidate,
+                    ratio,
+                    float(spec["min_ratio"]),
+                )
+                continue
+
+        ocr_text = attempt
+        ocr_language_used = candidate
+        break
+
+    if not ocr_text.strip() and best_attempt_text.strip():
+        ocr_text = best_attempt_text
+        ocr_language_used = best_attempt_language
 
     if not ocr_text.strip():
-        logger.info("OCR did not produce text for %s; returning empty.", pdf_path.name)
+        logger.info("OCR attempts did not produce text for %s; returning empty.", pdf_path.name)
         return "", None
 
     # 4) Detect language from OCR text (no more OCR runs)
     detected_language = detect_dominant_language(ocr_text)
-    logger.info("Final detected language (after OCR) for %s: %s", pdf_path.name, detected_language)
+    logger.info("Final Detected Language (after OCR): %s", pdf_path.name, detected_language)
 
-    final_language = detected_language or internal_code
+    if detected_language and detected_language != ocr_language_used:
+        refined = _run_ocr(detected_language)
+        if refined.strip():
+            ocr_text = refined
+            ocr_language_used = detected_language
+
+    final_language = detected_language or ocr_language_used
     return ocr_text, final_language
 
 def extract_text_with_vision_api(pdf_path: Path) -> Tuple[str, Optional[str]]:
@@ -546,8 +1085,12 @@ def extract_text_with_vision_api(pdf_path: Path) -> Tuple[str, Optional[str]]:
             pdf_path,
             language_hints=language_hints
         )
-        
-        extracted_text = result["text"]
+    
+        pages_detail = result.get("pages") or []
+        if pages_detail:
+            extracted_text = _compose_text_from_pages(pages_detail)
+        else:
+            extracted_text = result.get("text", "")
         vision_language = result.get("language")  # ISO 639-1 code (e.g., 'en', 'hi')
         
         # Map Vision API language code to our internal codes
@@ -833,12 +1376,107 @@ def extract_topics_from_pdf(pdf_path: Path) -> Dict[str, Any]:
         raise RuntimeError("GROQ_API_KEY environment variable is not set.")
 
     client = Groq(api_key=api_key)
-    stream_result = stream_topics_from_text(pdf_text, client, language_code=language_code)
+    page_entries = _split_pdf_text_into_pages(pdf_text)
+    page_chunks = _group_pages_into_chunks(page_entries, TOPIC_PAGES_PER_CHUNK)
 
+    if not page_chunks:
+        page_chunks = [{
+            "chunk_index": 1,
+            "start_page": None,
+            "end_page": None,
+            "text": pdf_text,
+            "pages": page_entries,
+        }]
+
+    logger.info(
+        "Submitting PDF text in %d chunk(s) for topic extraction (pages_per_chunk=%d)",
+        len(page_chunks),
+        TOPIC_PAGES_PER_CHUNK,
+    )
+
+    aggregated_topics: List[Dict[str, Any]] = []
+    aggregated_headings: List[Tuple[str, str]] = []
+    chunk_summaries: List[Dict[str, Any]] = []
     spec = language_spec
-    parsed_topics = parse_topics_text(stream_result["content"])
-    llm_headings = stream_result.get("headings", [])
-    chapter_titles_llm = [title.strip() for number, title in llm_headings if title.strip()]
+    for chunk in page_chunks:
+        chunk_text = (chunk.get("text") or "").strip()
+        if not chunk_text:
+            logger.warning(
+                "Skipping empty chunk %s (pages %s-%s)",
+                chunk.get("chunk_index"),
+                chunk.get("start_page"),
+                chunk.get("end_page"),
+            )
+            continue
+
+        chunk_index = chunk.get("chunk_index")
+        start_page = chunk.get("start_page")
+        end_page = chunk.get("end_page")
+
+        logger.info(
+            "Processing topic chunk %s/%s (pages %s-%s, chars=%d)",
+            chunk_index,
+            len(page_chunks),
+            start_page if start_page is not None else "?",
+            end_page if end_page is not None else "?",
+            len(chunk_text),
+        )
+
+        chunk_result = stream_topics_from_text(chunk_text, client, language_code=language_code)
+        chunk_content = (chunk_result.get("content") or "").strip()
+        if not chunk_content:
+            logger.warning(
+                "Topic extraction returned empty content for chunk %s (pages %s-%s)",
+                chunk_index,
+                start_page,
+                end_page,
+            )
+            continue
+
+        parsed_chunk_topics = parse_topics_text(chunk_content)
+        aggregated_topics = _merge_topic_lists(aggregated_topics, parsed_chunk_topics)
+        aggregated_headings.extend(chunk_result.get("headings", []))
+
+        chunk_summaries.append({
+            "chunk_index": chunk_index,
+            "start_page": start_page,
+            "end_page": end_page,
+            "topics_text": chunk_content,
+            "topics": parsed_chunk_topics,
+        })
+
+    if not aggregated_topics and chunk_summaries:
+        aggregated_topics = _merge_topic_lists([], chunk_summaries[-1].get("topics"))
+
+    final_topics = aggregated_topics
+    final_text = _render_topics_output(final_topics)
+
+    if not final_text.strip() and chunk_summaries:
+        final_text = "\n\n".join(summary.get("topics_text", "") for summary in chunk_summaries if summary.get("topics_text"))
+
+    if not final_text.strip():
+        logger.warning("Aggregated topic content is empty after processing %s", pdf_path.name)
+        return {
+            "success": False,
+            "language_code": language_code,
+            "language_label": language_spec["label"],
+            "topics_text": "",
+            "headings": [],
+            "chapter_titles": chapter_titles,
+            "chapter_title": primary_chapter_title,
+            "excerpt": _prepare_excerpt(pdf_text, limit=1_000),
+            "error": "Topic extraction did not return any content.",
+            "topics": [],
+            "chunk_topics": chunk_summaries,
+        }
+
+    final_headings = [(str(index), topic.get("title", "")) for index, topic in enumerate(final_topics, start=1)]
+    if aggregated_headings:
+        final_headings.extend(aggregated_headings)
+
+    llm_headings = final_headings
+    chapter_titles_llm = [title.strip() for _, title in llm_headings if title.strip()]
+
     merged_chapter_titles = _merge_unique_titles(chapter_titles_llm, chapter_titles)
     chapter_titles = merged_chapter_titles or chapter_titles
     if chapter_titles:
@@ -851,19 +1489,21 @@ def extract_topics_from_pdf(pdf_path: Path) -> Dict[str, Any]:
 
     print(f"Language: {spec['label']} ({language_code})")
     print(f"Chapter Titles Found: {len(chapter_titles)}")
-    print(f"Topics Extracted: {len(parsed_topics)}")
+    print(f"Topic Chunks Processed: {len(chunk_summaries)}")
+    print(f"Topics Extracted: {len(final_topics)}")
     if chapter_titles:
         print("Chapter Titles:", " | ".join(chapter_titles[:3]) + ("..." if len(chapter_titles) > 3 else ""))
     print("="*50 + "\n")
 
     return {
-        "success": bool(stream_result["content"].strip()),
+        "success": bool(final_text.strip()),
         "language_code": language_code,
         "language_label": spec["label"],
-        "topics_text": stream_result["content"],
-        "headings": stream_result["headings"],
+        "topics_text": final_text,
+        "headings": final_headings,
         "chapter_titles": chapter_titles,
         "chapter_title": primary_chapter_title,
         "excerpt": _prepare_excerpt(pdf_text, limit=1_000),
-        "topics": parsed_topics,
+        "topics": final_topics,
+        "chunk_topics": chunk_summaries,
     }
