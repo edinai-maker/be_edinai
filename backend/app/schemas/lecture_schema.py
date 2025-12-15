@@ -54,6 +54,7 @@ class LectureSummaryResponse(BaseModel):
     estimated_duration: Optional[int] = None
     fallback_used: Optional[bool] = None
     lecture_url: Optional[str] = None
+    cover_photo_url: Optional[str] = None
     std_slug: Optional[str] = None
     subject_slug: Optional[str] = None
     division_slug: Optional[str] = None

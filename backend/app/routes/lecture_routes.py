@@ -963,6 +963,7 @@ async def get_playback_payload(
     return {
         "lecture_id": requested_id,
         "title": record.get("title"),
+        "cover_photo_url": record.get("cover_photo_url"),
         "lecture_url": lecture_url,
     }
 

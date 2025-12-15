@@ -240,6 +240,7 @@ async def get_lecture(lecture_id: str) -> Dict[str, Any]:
     record.setdefault("lecture_id", row.get("lecture_uid"))
     record.setdefault("metadata", {})
     record.setdefault("lecture_url", row.get("lecture_link"))
+    record.setdefault("cover_photo_url", row.get("cover_photo_url"))
     record["db_record_id"] = row.get("id")
     return record
 
@@ -447,6 +448,7 @@ async def list_lectures(
             "created_at": record.get("created_at"),
             "fallback_used": record.get("fallback_used", False),
             "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
+            "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
             "std": std_value,
             "subject": subject_value,
             "division": division_value,
@@ -499,7 +501,8 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
                 "language": record.get("language"),
                 "play_count": play_count,
                 "last_played_at": record.get("last_played_at"),
-                "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
+                # "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
+                "lecture_url": record.get("lecture_url") or row.get("lecture_link"),"cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
             }
         )
 

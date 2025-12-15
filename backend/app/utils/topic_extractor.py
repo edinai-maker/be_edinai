@@ -5,7 +5,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 try:
@@ -109,6 +109,25 @@ LANGUAGE_SPECS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+TESSERACT_LANGUAGE_PRIORITIES: Dict[str, Sequence[str]] = {
+    "guj": ("guj", "eng"),
+    "hin": ("hin", "eng"),
+    "eng": ("eng",),
+}
+
+DEFAULT_TESSERACT_LANGUAGES: Sequence[str] = ("eng", "hin", "guj")
+
+TESSERACT_BASE_CONFIG: Sequence[str] = (
+    "--oem",
+    "1",
+    "--psm",
+    "6",
+    "-c",
+    "preserve_interword_spaces=1",
+)
+
+OCR_OVERSAMPLE_DPI = int(os.getenv("OCR_OVERSAMPLE_DPI", "300"))
+
 LANGDETECT_TO_LANGUAGE_CODE = {
     "hi": "hin",
     "gu": "guj",
@@ -154,6 +173,29 @@ def _get_language_spec(code: Optional[str]) -> Dict[str, Any]:
     if not selected:
         raise ValueError(f"Unsupported or missing language code: {code!r}")
     return LANGUAGE_SPECS[selected]
+
+
+def _compose_tesseract_language_argument(preferred: Sequence[str]) -> str:
+    seen_internal: set[str] = set()
+    resolved: List[str] = []
+
+    for raw_code in preferred:
+        normalized = _select_supported_language(raw_code)
+        if not normalized:
+            normalized = (raw_code or "").strip().lower()
+            if normalized not in LANGUAGE_SPECS:
+                continue
+
+        if normalized in seen_internal:
+            continue
+
+        seen_internal.add(normalized)
+        resolved.append(LANGUAGE_SPECS[normalized]["ocr_code"])
+
+    if not resolved:
+        resolved.append(LANGUAGE_SPECS["eng"]["ocr_code"])
+
+    return "+".join(resolved)
 
 
 def _count_alpha_chars(text: str) -> int:
@@ -639,7 +681,12 @@ def detect_dominant_language(text: str) -> Optional[str]:
     return None
 
 
-def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
+def read_pdf_with_ocrmypdf(
+    pdf_path: Path,
+    ocr_language: str,
+    *,
+    tesseract_args: Optional[Sequence[str]] = None,
+) -> str:
     if ocrmypdf is None:
         raise RuntimeError("ocrmypdf is required. Install it with 'pip install ocrmypdf'.")
 
@@ -649,16 +696,25 @@ def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
         sidecar_text = tmp_path / "ocr_output.txt"
 
         try:
+            ocrmypdf_kwargs: Dict[str, Any] = {
+                "force_ocr": True,
+                "language": ocr_language,
+                "progress_bar": False,
+                "rotate_pages": True,
+                "deskew": True,
+            }
+
+            if OCR_OVERSAMPLE_DPI > 0:
+                ocrmypdf_kwargs["oversample"] = OCR_OVERSAMPLE_DPI
+
+            if tesseract_args:
+                ocrmypdf_kwargs["tesseract_config"] = list(tesseract_args)
+
             ocrmypdf.ocr(
                 str(pdf_path),
                 str(output_pdf),
                 sidecar=str(sidecar_text),
-                force_ocr=True,
-                language=ocr_language,
-                progress_bar=False,  # progress bar / extra output band
-                rotate_pages=True,
-                deskew=True,
-                # oversample=300,  # OPTIONAL: DPI normalize karne ke liye, chaho to uncomment karo
+                **ocrmypdf_kwargs,
             )
         except OCRMissingDependencyError as exc:
             raise RuntimeError(
@@ -713,14 +769,21 @@ def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]
     # 2) Agar embedded text nahi mila, tab hi OCR use karo
     def _run_ocr(lang_code: str) -> str:
         try:
-            # map internal lang code -> tesseract code
-            lang_map = {
-                "eng": "eng",
-                "hin": "hin",
-                "guj": "guj",
-            }
-            ocr_language = lang_map.get(lang_code, "eng+hin+guj")
-            return read_pdf_with_ocrmypdf(pdf_path, ocr_language=ocr_language)
+            preferred: List[str] = []
+            if lang_code:
+                preferred.extend(TESSERACT_LANGUAGE_PRIORITIES.get(lang_code, (lang_code,)))
+
+            for default_code in DEFAULT_TESSERACT_LANGUAGES:
+                if default_code not in preferred:
+                    preferred.append(default_code)
+
+            ocr_language = _compose_tesseract_language_argument(preferred)
+
+            return read_pdf_with_ocrmypdf(
+                pdf_path,
+                ocr_language=ocr_language,
+                tesseract_args=TESSERACT_BASE_CONFIG,
+            )
         except RuntimeError as exc:  # ocrmypdf / deps issue
             logger.warning("OCR failed for %s using %s: %s", pdf_path.name, lang_code, exc)
             return ""
