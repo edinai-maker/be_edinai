@@ -513,14 +513,24 @@ class GroqService:
                 raise RuntimeError(f"Invalid JSON from model: {repaired_error}") from e
         
         slides = data.get("slides", [])
+        fallback_used = False
         if len(slides) != 9:
-            slides = await self._retry_exact_slide_count(
-                base_prompt=prompt,
-                original_response=response,
-                language=language,
-                duration=duration,
-                is_math=is_math,
-            )
+            try:
+                slides = await self._retry_exact_slide_count(
+                    base_prompt=prompt,
+                    original_response=response,
+                    language=language,
+                    duration=duration,
+                    is_math=is_math,
+                )
+            except RuntimeError:
+                fallback_used = True
+                slides = self._coerce_slide_count_to_nine(
+                    slides=slides,
+                    source_text=text,
+                    language=language,
+                    duration=duration,
+                )
         
         # Post-process based on subject
         if is_math:
@@ -543,7 +553,8 @@ class GroqService:
         
         return {
             "slides": slides,
-            "estimated_duration": duration
+            "estimated_duration": duration,
+            "fallback_used": fallback_used,
         }
     async def _retry_exact_slide_count(
         self,
