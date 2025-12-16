@@ -8,8 +8,8 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 from typing import Any, Dict, Iterable, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 
@@ -291,7 +291,101 @@ async def upload_student_roster(
     if duplicate_report:
         response_data["duplicate_report"] = duplicate_report
     return ResponseBase(status=bool(entries), message=message, data=response_data)
+@router.post("/single", response_model=ResponseBase)
+async def create_single_roster_student(
+    payload: Dict[str, Any] = Body(...),
+    current_user: dict = Depends(member_required(WorkType.STUDENT)),
+) -> ResponseBase:
+    """Create a single roster student from JSON row data.
 
+    Expected keys (case-insensitive variants supported):
+      - enrollment_number / Enrollment Number
+      - first_name / First Name
+      - last_name / Last Name
+      - std / class / class_name / Std
+      - division / Div
+    """
+
+    admin_id = current_user["admin_id"]
+
+    # Support both snake_case and template-style keys
+    enrollment_number = _normalize_value(
+        payload.get("enrollment_number")
+        or payload.get("Enrollment Number")
+    )
+    first_name = _normalize_value(
+        payload.get("first_name")
+        or payload.get("First Name")
+    )
+    last_name_raw = (
+        payload.get("last_name")
+        or payload.get("Last Name")
+    )
+    last_name = _normalize_value(last_name_raw) or None
+
+    raw_std = (
+        payload.get("std")
+        or payload.get("class")
+        or payload.get("class_name")
+        or payload.get("Std")
+    )
+    std_val = _normalize_value(raw_std) if raw_std is not None else ""
+
+    raw_div = payload.get("division") or payload.get("Div")
+    division = _normalize_value(raw_div) or None
+
+    # Validations similar to upload_student_roster
+    if not enrollment_number:
+        raise HTTPException(status_code=400, detail="Enrollment Number is required")
+
+    if not (ENROLLMENT_MIN_LENGTH <= len(enrollment_number) <= ENROLLMENT_MAX_LENGTH):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Enrollment Number must be between "
+                f"{ENROLLMENT_MIN_LENGTH} and {ENROLLMENT_MAX_LENGTH} characters"
+            ),
+        )
+
+    if not first_name or not std_val:
+        raise HTTPException(status_code=400, detail="First Name and Std are required")
+
+    # Duplicate check in DB
+    existing = roster_repo.fetch_existing_enrollments(admin_id, [enrollment_number])
+    if existing:
+        raise HTTPException(status_code=400, detail="Enrollment already exists")
+
+    auto_password = _generate_auto_password(first_name, enrollment_number)
+
+    entry = {
+        "enrollment_number": enrollment_number,
+        "first_name": first_name,
+        "last_name": last_name,
+        "std": std_val,
+        "division": division,
+        "auto_password": auto_password,
+        "assigned_member_id": current_user["id"],
+    }
+
+    roster_repo.insert_roster_entries(admin_id, [entry])
+
+    portal_repo.bulk_upsert_student_accounts(
+        [
+            {
+                "enrollment_number": enrollment_number,
+                "password_hash": hash_password(auto_password),
+            }
+        ]
+    )
+
+    response_data: Dict[str, Any] = {
+        "records_added": 1,
+        "students": [entry],
+        "duplicate_count": 0,
+        "duplicates": [],
+    }
+
+    return ResponseBase(status=True, message="Student added successfully", data=response_data)
 @router.get("/roster", response_model=ResponseBase)
 async def list_student_roster(current_user: dict = Depends(member_required(WorkType.STUDENT))) -> ResponseBase:
     admin_id = current_user["admin_id"]
