@@ -504,6 +504,34 @@ def send_chat_message(
     )
     return _prepare_chat_message(record)
 
+def share_video_to_chat(
+    *,
+    current_context: Dict[str, Optional[str]],
+    peer_context: Dict[str, Optional[str]],
+    video_id: int,
+    message: Optional[str] = None,
+) -> Dict[str, Any]:
+    video = student_portal_video_repository.get_video_with_engagement(
+        admin_id=current_context["admin_id"],
+        std=current_context.get("std"),
+        enrollment_number=current_context["enrollment_number"],
+        video_id=video_id,
+    )
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+
+    prepared = _prepare_video_payload(video)
+    title = prepared.get("title") or f"Video {video_id}"
+    video_url = prepared.get("video_url")
+    parts = [f"Video: {title}"]
+    if video_url:
+        parts.append(str(video_url))
+    trimmed = _sanitize(message)
+    if trimmed:
+        parts.append(trimmed)
+
+    payload = SendChatMessageRequest(peer_enrollment=peer_context["enrollment_number"], message="\n".join(parts))
+    return send_chat_message(payload=payload, current_context=current_context, peer_context=peer_context)
 
 async def send_chat_attachment(
     *,

@@ -97,3 +97,7 @@ class StudentVideoCommentRequest(BaseModel):
 class SendChatMessageRequest(BaseModel):
     peer_enrollment: str = Field(..., max_length=255)
     message: Optional[str] = Field(None, max_length=2_000)
+
+class StudentVideoShareRequest(BaseModel):
+    peer_enrollment: str = Field(..., max_length=255)
+    message: Optional[str] = Field(None, max_length=500)

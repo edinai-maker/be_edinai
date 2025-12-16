@@ -23,6 +23,7 @@ from ..schemas.student_portal_schema import (
     StudentVideoExternalRequest,
     StudentVideoUploadRequest,
     StudentVideoSubscribeRequest,
+    StudentVideoShareRequest,
     StudentVideoWatchRequest,
 )
 from ..realtime.socket_server import broadcast_chat_message
@@ -359,6 +360,44 @@ async def record_video_watch(
     )
     return ResponseBase(status=True, message="Watch progress saved", data={})
 
+@router.post("/videos/{video_id}/share", response_model=ResponseBase)
+async def share_video_to_chat(
+    video_id: int,
+    payload: StudentVideoShareRequest,
+    current_enrollment: str = Depends(_get_current_student),
+) -> ResponseBase:
+    current_context = student_portal_service.get_roster_context(current_enrollment)
+    peer_context = student_portal_service.ensure_same_classmate(
+        current=current_context,
+        peer_enrollment=payload.peer_enrollment,
+    )
+
+    record = student_portal_service.share_video_to_chat(
+        current_context=current_context,
+        peer_context=peer_context,
+        video_id=video_id,
+        message=payload.message,
+    )
+
+    messages = student_portal_service.list_chat_messages(
+        current_context=current_context,
+        peer_context=peer_context,
+    )
+
+    await broadcast_chat_message(
+        admin_id=current_context["admin_id"],
+        enrollments=[current_context["enrollment_number"], peer_context["enrollment_number"]],
+        payload={
+            "message": record,
+            "participants": [current_context["enrollment_number"], peer_context["enrollment_number"]],
+        },
+    )
+
+    return ResponseBase(
+        status=True,
+        message="Video shared successfully",
+        data={"message": record, "messages": messages},
+    )
 
 @router.get("/watched-lectures", response_model=ResponseBase)
 async def list_watched_lectures(current_enrollment: str = Depends(_get_current_student)) -> ResponseBase:
