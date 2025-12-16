@@ -331,7 +331,7 @@ MANDATORY 9-SLIDE STRUCTURE:
   "title": "Important Concepts You Must Know",
   "bullets": ["Concept 1", "Concept 2", "Concept 3"],
   "narration": "Explain key concepts from the chapter with short examples. ({words['normal']} words)",
-  "question": "Quick understanding check question"
+  "question": ""
 }}
 
 === SLIDE 3: DEEP UNDERSTANDING ===
@@ -339,7 +339,7 @@ MANDATORY 9-SLIDE STRUCTURE:
   "title": "Deep Understanding of the Topic",
   "bullets": [],
   "narration": "Explain deeper meaning behind the topic using clear steps. ({words['normal']} words)",
-  "question": "Curiosity-building question"
+  "question": ""
 }}
 
 === SLIDES 4-7: DETAILED TEACHING ===
@@ -784,14 +784,14 @@ class GroqService:
                 "title": "Key Concepts Overview",
                 "bullets": [f"Core idea about {topic}", "Important fact", "Key relationship"],
                 "narration": f"Summarize the essential concepts students must know about {topic}.",
-                "question": "Which key concept feels most familiar?",
+                "question": "",
                 "target_words": normal_words,
             },
             {
                 "title": "Deep Understanding",
                 "bullets": [],
                 "narration": f"Explain why these ideas matter and how they connect within {topic}.",
-                "question": "Where would you apply this understanding?",
+                "question": "",
                 "target_words": normal_words,
             },
             *[
@@ -1077,7 +1077,7 @@ class GroqService:
                     "title": title,
                     "bullets": bullet_points,
                     "narration": narration,
-                    "question": question,
+                    "question": question if slide_number == 9 else "",
                 }
             )
         
@@ -1159,6 +1159,8 @@ class GroqService:
             
             if slide_data["title"] and (slide_data["narration"] or slide_data["question"]):
                 slide_data["number"] = slide_number
+                if slide_number == 9:
+                    slide_data["question"] = ""
                 slides.append(slide_data)
         
         self._attach_subtopics_to_slides(slides)
