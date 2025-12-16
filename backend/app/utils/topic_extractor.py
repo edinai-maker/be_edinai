@@ -649,6 +649,7 @@ def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
         sidecar_text = tmp_path / "ocr_output.txt"
 
         try:
+            jobs = int(os.getenv("OCR_JOBS", "2")) 
             ocrmypdf.ocr(
                 str(pdf_path),
                 str(output_pdf),
@@ -658,6 +659,7 @@ def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
                 progress_bar=False,  # progress bar / extra output band
                 rotate_pages=True,
                 deskew=True,
+                jobs=jobs,
                 # oversample=300,  # OPTIONAL: DPI normalize karne ke liye, chaho to uncomment karo
             )
         except OCRMissingDependencyError as exc:
