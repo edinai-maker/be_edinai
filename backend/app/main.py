@@ -2,7 +2,7 @@
 from __future__ import annotations
 import time
 from pathlib import Path
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from socketio import ASGIApp
@@ -35,6 +35,7 @@ from .routes import (
 from .utils.file_handler import UPLOAD_DIR, ensure_upload_dir, ensure_upload_subdir
 from .services.auth_service import ensure_dev_admin_account
 from .realtime.socket_server import sio
+from .routes.chapter_material_routes import chapter_material_http_exception_handler
 # ----------------------------------
 # PROMETHEUS METRICS (ADDED)
 # ----------------------------------
@@ -74,6 +75,13 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def prometheus_middleware(request: Request, call_next):
         start_time = time.time()
+        try:
+            response = await call_next(request)
+        except HTTPException as exc:
+            if request.url.path.startswith("/chapter-materials"):
+                response = await chapter_material_http_exception_handler(request, exc)
+            else:
+                raise
         response = await call_next(request)
         duration = time.time() - start_time
         HTTP_REQUEST_COUNT.labels(

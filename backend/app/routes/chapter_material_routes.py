@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status, Query, Request, Body
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import desc, func, or_
 
@@ -43,6 +43,7 @@ from app.repository.chapter_material_repository import (
     get_dashboard_stats,
     get_chapter_overview_data,
     _load_topics_path,
+    list_standards_for_admin,
     load_material_topics,
     persist_material_topics,
     save_extracted_topics_files,
@@ -57,10 +58,6 @@ from app.repository.chapter_material_repository import (
     persist_assistant_suggestions,
     get_cached_suggestions_by_ids,
     get_topics_by_ids,
-    list_chapters_for_selection,
-    list_subjects_for_std,
-    list_standards_for_admin,
-    find_material_ids_for_chapter,
 )
 from app.plan_limits import PLAN_CREDIT_LIMITS, PLAN_DURATION_LIMITS, PLAN_SUGGESTION_LIMITS
 from app.utils.file_handler import (
@@ -80,7 +77,6 @@ from app.services.lecture_service import LectureService
 from app.utils.dependencies import admin_required, get_current_user
 from groq import Groq
 
-from fastapi.responses import FileResponse, JSONResponse
 import os
 from pathlib import Path
 from datetime import datetime
@@ -91,6 +87,43 @@ def get_lecture_service(db: Session = Depends(get_db)) -> LectureService:
     return LectureService(db=db)
 
 logger = logging.getLogger(__name__)
+
+def _extract_error_message(detail: Any) -> str:
+    """Normalize HTTPException.detail into a single human-readable string."""
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict):
+        for key in ("message", "detail", "error"):
+            value = detail.get(key)
+            if value:
+                return str(value)
+        return json.dumps(detail)
+    return str(detail)
+
+
+async def chapter_material_http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Ensure chapter management errors always return ErrorResponse with only a details.message."""
+    message = _extract_error_message(exc.detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": False,
+            "details": {"message": message},
+        },
+    )
+
+def _normalize_string(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+def _unique_sorted_strings(values: List[Optional[str]]) -> List[str]:
+    seen: Dict[str, str] = {}
+    for raw in values:
+        candidate = (raw or "").strip()
+        if not candidate:
+            continue
+        normalized = candidate.lower()
+        seen.setdefault(normalized, candidate)
+    return sorted(seen.values(), key=lambda item: item.lower())
 
 # Local constants (kept same)
 PDF_MAX_SIZE = 50 * 1024 * 1024  # 15MB
@@ -121,58 +154,95 @@ async def get_chapter_filters(
     db: Session = Depends(get_db),
 ) -> ResponseBase:
     admin_id = _resolve_admin_id(current_user)
-    standards = list_standards_for_admin(admin_id)
     subjects: List[str] = []
+    overview_entries = get_chapter_overview_data(admin_id) or []
+    
+    generated_entries = [
+        entry
+        for entry in overview_entries
+        if entry.get("std") and entry.get("subject") and entry.get("chapter")
+    ]
+
+    standards = _unique_sorted_strings([entry.get("std") for entry in generated_entries])
+    subjects = List[str] = []
     chapter_options: List[str] = []
     selected_chapter = chapter or chapter_alias
 
-    lectures: List[Dict[str, Any]] = []
+    # lectures: List[Dict[str, Any]] = []
 
-    if std:
-        subjects = list_subjects_for_std(admin_id, std=std)
-        if subject:
-            chapter_options = list_chapters_for_selection(
-                admin_id,
-                std=std,
-                subject=subject,
-            )
-            if selected_chapter:
-                chapter_clean = selected_chapter.strip().lower()
-                if chapter_clean not in {c.strip().lower() for c in chapter_options}:
-                    chapter_options = [selected_chapter]
-                else:
-                    chapter_options = [c for c in chapter_options if c.strip().lower() == chapter_clean]
-                material_ids = find_material_ids_for_chapter(
-                    admin_id=admin_id,
-                    std=std,
-                    subject=subject,
-                    chapter_identifier=selected_chapter,
-                )
-                lectures = _fetch_filtered_lectures(
-                    db,
-                    admin_id=admin_id,
-                    std=std,
-                    subject=subject,
-                    chapter=None if material_ids else selected_chapter,
-                    material_ids=material_ids,
-                )
+    # if std:
+    #     subjects = list_subjects_for_std(admin_id, std=std)
+    #     if subject:
+    #         chapter_options = list_chapters_for_selection(
+    #             admin_id,
+    #             std=std,
+    #             subject=subject,
+    #         )
+    #         if selected_chapter:
+    #             chapter_clean = selected_chapter.strip().lower()
+    #             if chapter_clean not in {c.strip().lower() for c in chapter_options}:
+    #                 chapter_options = [selected_chapter]
+    #             else:
+    #                 chapter_options = [c for c in chapter_options if c.strip().lower() == chapter_clean]
+    #             material_ids = find_material_ids_for_chapter(
+    #                 admin_id=admin_id,
+    #                 std=std,
+    #                 subject=subject,
+    #                 chapter_identifier=selected_chapter,
+    #             )
+    std_filter = _normalize_string(std) if std else None
+    subject_filter = _normalize_string(subject) if subject else None
+    chapter_filter = _normalize_string(selected_chapter) if selected_chapter else None
 
-    response_data = {
-        "standards": standards,
-        "subjects": subjects,
-        "chapter": chapter_options,
-    }
-
-    response_data.update(
-        {
-            "selected_std": std,
-            "selected_subject": subject,
-            "selected_chapter": selected_chapter,
-            "lectures": lectures,
-            "lectures_count": len(lectures),
-        }
+    std_filtered_entries = (
+        [entry for entry in generated_entries if _normalize_string(entry.get("std")) == std_filter]
+        if std_filter
+        else []
     )
 
+    if std_filter:
+        subjects = _unique_sorted_strings([entry.get("subject") for entry in std_filtered_entries])
+
+    material_ids: List[int] = []
+    subject_filtered_entries: List[Dict[str, Any]] = []
+    if std_filter and subject_filter:
+        subject_filtered_entries = [
+            entry for entry in std_filtered_entries if _normalize_string(entry.get("subject")) == subject_filter
+        ]
+        chapter_options = _unique_sorted_strings([entry.get("chapter") for entry in subject_filtered_entries])
+
+        if chapter_filter:
+            matching_entries = [
+                entry for entry in subject_filtered_entries if _normalize_string(entry.get("chapter")) == chapter_filter
+            ]
+            material_ids = [
+                entry.get("material_id")
+                for entry in matching_entries
+                if isinstance(entry.get("material_id"), int)
+            ]
+
+    lectures: List[Dict[str, Any]] = []
+    if std and subject:
+        lectures = _fetch_filtered_lectures(
+            db,
+            admin_id=admin_id,
+            std=std,
+            subject=subject,
+            chapter=None if material_ids else selected_chapter,
+            material_ids=material_ids or None,
+        )
+
+    response_data = {
+        "standards": [],
+        "subjects": subjects,
+        "chapter": chapter_options,
+        "selected_std": std,
+        "selected_subject": subject,
+        "selected_chapter": selected_chapter,
+        "lectures": lectures,
+        "lectures_count": len(lectures),
+    }
+    
     return ResponseBase(status=True, message="Chapter filters fetched", data=response_data)
 
 @router.get("/chapters", response_model=ResponseBase)
