@@ -7,12 +7,14 @@ import io
 import os
 import re
 import uuid
+from pathlib import Path
 from typing import List, Optional, Set
 
 from fastapi import HTTPException, UploadFile
 from PIL import Image
 
-UPLOAD_DIR = "./uploads"
+BASE_BACKEND_DIR = Path(__file__).resolve().parents[2]
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", str(BASE_BACKEND_DIR / "uploads"))
 DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 DEFAULT_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".svg", ".webp"}
 DEFAULT_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/svg+xml", "image/webp"}
