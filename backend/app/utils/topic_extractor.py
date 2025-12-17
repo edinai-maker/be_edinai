@@ -577,8 +577,7 @@ def detect_ocr_language_with_pytesseract(pdf_path: Path) -> Optional[str]:
         return None
 
     try:
-        # ✅ speed: low dpi is enough for OSD
-        images = convert_from_path(str(pdf_path), first_page=1, last_page=1, dpi=120)
+        images = convert_from_path(str(pdf_path), first_page=1, last_page=1)
     except Exception:
         return None
 
@@ -602,7 +601,6 @@ def detect_ocr_language_with_pytesseract(pdf_path: Path) -> Optional[str]:
         return language_code
 
     return None
-
 
 
 def detect_dominant_language(text: str) -> Optional[str]:
@@ -645,31 +643,28 @@ def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
     if ocrmypdf is None:
         raise RuntimeError("ocrmypdf is required. Install it with 'pip install ocrmypdf'.")
 
-    OCR_JOBS = int(os.getenv("OCR_JOBS", "2"))  # ✅ c7i-flex.large = 2 vCPU => 2 best
-    ROTATE = os.getenv("OCR_ROTATE_PAGES", "true").lower() == "true"
-    DESKEW = os.getenv("OCR_DESKEW", "true").lower() == "true"
-
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
         output_pdf = tmp_path / "ocr_output.pdf"
         sidecar_text = tmp_path / "ocr_output.txt"
 
         try:
+            jobs = int(os.getenv("OCR_JOBS", "2")) 
             ocrmypdf.ocr(
                 str(pdf_path),
                 str(output_pdf),
                 sidecar=str(sidecar_text),
                 force_ocr=True,
                 language=ocr_language,
-                progress_bar=False,
-                rotate_pages=ROTATE,
-                deskew=DESKEW,
-                jobs=OCR_JOBS,  # ✅ speed: parallel pages
-                # oversample=300,  # keep OFF unless quality issue
+                progress_bar=False,  # progress bar / extra output band
+                rotate_pages=True,
+                deskew=True,
+                jobs=jobs,
+                # oversample=300,  # OPTIONAL: DPI normalize karne ke liye, chaho to uncomment karo
             )
         except OCRMissingDependencyError as exc:
             raise RuntimeError(
-                "OCRmyPDF is missing required external dependencies (e.g. Ghostscript or Tesseract). "
+                "OCRmyPDF is missing required external dependencies (e.g., Ghostscript or Tesseract). "
                 "Install them and try again."
             ) from exc
         except getattr(ocrmypdf.exceptions, "PriorOcrFoundError", tuple()) as exc:  # type: ignore[arg-type]
@@ -688,11 +683,10 @@ def read_pdf_with_ocrmypdf(pdf_path: Path, ocr_language: str) -> str:
         if output_pdf.exists():
             try:
                 return read_pdf(output_pdf)
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:  # pragma: no cover - diagnostics only
                 logger.warning("Failed to read OCR output PDF text: %s", exc)
 
         return ""
-
 
 
 def extract_text_with_auto_language(pdf_path: Path) -> Tuple[str, Optional[str]]:
