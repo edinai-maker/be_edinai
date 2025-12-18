@@ -5,6 +5,7 @@ Handles all database operations for lecture storage
 
 import asyncio
 import json
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,6 +29,67 @@ def _text_or(value: Any, *, default: Optional[str] = None) -> Optional[str]:
     except Exception:
         return default
     return text if text else default
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    """Convert various numeric representations into integers, otherwise None."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        text = text.replace(",", "")
+        try:
+            numeric = float(text)
+            if math.isnan(numeric) or math.isinf(numeric):
+                return None
+            return int(numeric)
+        except ValueError:
+            digits = "".join(ch for ch in text if ch.isdigit())
+            if digits:
+                try:
+                    return int(digits)
+                except ValueError:
+                    return None
+    return None
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    """Best-effort conversion to datetime objects for API responses."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        candidates = [text]
+        # Support space-delimited timestamps and Z suffix
+        if "T" not in text and " " in text:
+            candidates.append(text.replace(" ", "T"))
+        if text.endswith("Z"):
+            candidates.append(f"{text[:-1]}+00:00")
+        for candidate in candidates:
+            try:
+                return datetime.fromisoformat(candidate)
+            except ValueError:
+                continue
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+    return None
 
 # Basic Gujarati/Hindi -> Roman transliteration map for search normalization.
 _GUJARATI_ROMAN_MAP = {
@@ -652,9 +714,18 @@ async def list_lectures(
         if lang_filter and (record.get("language") or "").lower() != lang_filter:
             continue
 
-        std_value = metadata.get("std") or metadata.get("class") or row.get("std") or "general"
-        subject_value = metadata.get("subject") or row.get("subject") or "lecture"
-        division_value = metadata.get("division") or metadata.get("section")
+        std_value = (
+            _text_or(metadata.get("std"))
+            or _text_or(metadata.get("class"))
+            or _text_or(row.get("std"))
+            or "general"
+        )
+        subject_value = (
+            _text_or(metadata.get("subject"))
+            or _text_or(row.get("subject"))
+            or "lecture"
+        )
+        division_value = _text_or(metadata.get("division")) or _text_or(metadata.get("section"))
 
         if std_filter and _slugify(std_value) != std_filter:
             continue
@@ -669,14 +740,18 @@ async def list_lectures(
 
         summary = {
             "lecture_id": lecture_uid,
-            "title": record.get("title") or row.get("lecture_title") or "Untitled lecture",
-            "language": record.get("language"),
-            "total_slides": record.get("total_slides"),
-            "estimated_duration": record.get("estimated_duration"),
-            "created_at": record.get("created_at"),
+            "title": (
+                _text_or(record.get("title"))
+                or _text_or(row.get("lecture_title"))
+                or "Untitled lecture"
+            ),
+            "language": _text_or(record.get("language")),
+            "total_slides": _coerce_int(record.get("total_slides")),
+            "estimated_duration": _coerce_int(record.get("estimated_duration")),
+            "created_at": _coerce_datetime(record.get("created_at") or row.get("created_at")),
             "fallback_used": record.get("fallback_used", False),
-            "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
-            "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
+            "lecture_url": _text_or(record.get("lecture_url")) or _text_or(row.get("lecture_link")),
+            "cover_photo_url": _text_or(record.get("cover_photo_url")) or _text_or(row.get("cover_photo_url")),
             "std": std_value,
             "subject": subject_value,
             "division": division_value,
@@ -792,8 +867,12 @@ async def search_lectures_by_title(
                     # No fuzzy query constructed and strict match failed
                     continue
 
+        lecture_uid = _text_or(row.get("lecture_uid")) or _text_or(record.get("lecture_id"))
+        if not lecture_uid:
+            continue
+
         summary = {
-            "lecture_id": row.get("lecture_uid"),
+            "lecture_id": lecture_uid,
             "title": record.get("title") or row.get("lecture_title") or "Untitled lecture",
             "language": record.get("language"),
             "total_slides": record.get("total_slides"),
