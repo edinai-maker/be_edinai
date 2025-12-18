@@ -901,7 +901,7 @@ def add_comment(
             i.created_at,
             i.like_count,
             COALESCE(
-                NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.father_name)), ''),
+                NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.middle_name)), ''),
                 NULLIF(TRIM(CONCAT_WS(' ', r.first_name, r.last_name)), ''),
                 NULLIF(i.enrollment_number, '')
             ) AS student_name
@@ -931,7 +931,7 @@ def list_comments(video_id: int) -> List[Dict[str, Any]]:
             c.created_at,
             c.like_count,
             COALESCE(
-                NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.father_name)), ''),
+                NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.middle_name)), ''),
                 NULLIF(TRIM(CONCAT_WS(' ', r.first_name, r.last_name)), ''),
                 NULLIF(c.enrollment_number, '')
             ) AS student_name

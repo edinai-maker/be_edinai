@@ -825,9 +825,18 @@ async def search_lectures_by_title(
         if lang_filter and (record.get("language") or "").lower() != lang_filter:
             continue
 
-        std_value = metadata.get("std") or metadata.get("class") or row.get("std") or "general"
-        subject_value = metadata.get("subject") or row.get("subject") or "lecture"
-        division_value = metadata.get("division") or metadata.get("section")
+        std_value = (
+            _text_or(metadata.get("std"))
+            or _text_or(metadata.get("class"))
+            or _text_or(row.get("std"))
+            or "general"
+        )
+        subject_value = (
+            _text_or(metadata.get("subject"))
+            or _text_or(row.get("subject"))
+            or "lecture"
+        )
+        division_value = _text_or(metadata.get("division")) or _text_or(metadata.get("section"))
 
         if std_filter and _slugify(std_value) != std_filter:
             continue
@@ -873,14 +882,18 @@ async def search_lectures_by_title(
 
         summary = {
             "lecture_id": lecture_uid,
-            "title": record.get("title") or row.get("lecture_title") or "Untitled lecture",
-            "language": record.get("language"),
-            "total_slides": record.get("total_slides"),
-            "estimated_duration": record.get("estimated_duration"),
-            "created_at": record.get("created_at"),
+            "title": (
+                _text_or(record.get("title"))
+                or _text_or(row.get("lecture_title"))
+                or "Untitled lecture"
+            ),
+            "language": _text_or(record.get("language")),
+            "total_slides": _coerce_int(record.get("total_slides")),
+            "estimated_duration": _coerce_int(record.get("estimated_duration")),
+            "created_at": _coerce_datetime(record.get("created_at") or row.get("created_at")),
             "fallback_used": record.get("fallback_used", False),
-            "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
-            "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
+            "lecture_url": _text_or(record.get("lecture_url")) or _text_or(row.get("lecture_link")),
+            "cover_photo_url": _text_or(record.get("cover_photo_url")) or _text_or(row.get("cover_photo_url")),
             "std": std_value,
             "subject": subject_value,
             "division": division_value,

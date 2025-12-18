@@ -611,7 +611,8 @@ async def update_roster_student(
     # -------------------------
     roster_fields = {
         "first_name": payload.first_name.strip(),
-        "last_name": _strip_optional(payload.father_name),
+        "middle_name": _strip_optional(payload.middle_name),
+        "last_name": _strip_optional(payload.last_name),
         "std": payload.class_stream.strip(),
         "division": _strip_optional(payload.division),
     }
