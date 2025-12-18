@@ -31,6 +31,13 @@ def _text_or(value: Any, *, default: Optional[str] = None) -> Optional[str]:
     return text if text else default
 
 
+def _ensure_metadata_dict(value: Any) -> Dict[str, Any]:
+    """Ensure metadata-like payloads are dictionaries."""
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
 def _coerce_int(value: Any) -> Optional[int]:
     """Convert various numeric representations into integers, otherwise None."""
     if value is None:
@@ -347,7 +354,7 @@ async def search_lectures_by_title(
         if not row.get("lecture_data"):
             continue
         record = _clone_record(row.get("lecture_data"))
-        metadata = record.get("metadata") or {}
+        metadata = _ensure_metadata_dict(record.get("metadata"))
 
         if lang_filter and (record.get("language") or "").lower() != lang_filter:
             continue
@@ -837,7 +844,7 @@ async def list_lectures(
         if not row.get("lecture_data"):
             continue
         record = _clone_record(row.get("lecture_data"))
-        metadata = record.get("metadata") or {}
+        metadata = _ensure_metadata_dict(record.get("metadata"))
 
         if lang_filter and (record.get("language") or "").lower() != lang_filter:
             continue
@@ -1235,6 +1242,53 @@ class LectureRepository:
             division=division,
             admin_id=admin_id,
         )
+
+
+    async def search_lectures_by_title(
+        self,
+
+        *,
+
+        query: str,
+
+        language: Optional[str] = None,
+
+        limit: int = 100,
+
+        offset: int = 0,
+
+        std: Optional[str] = None,
+
+        subject: Optional[str] = None,
+
+        division: Optional[str] = None,
+
+        admin_id: Optional[int] = None,
+
+    ) -> List[Dict[str, Any]]:
+
+        return await search_lectures_by_title(
+
+            query=query,
+
+            language=language,
+
+            limit=limit,
+
+            offset=offset,
+
+            std=std,
+
+            subject=subject,
+
+            division=division,
+
+            admin_id=admin_id,
+
+        )
+
+
+
 
     async def list_played_lectures(self, admin_id: Optional[int] = None) -> List[Dict[str, Any]]:
         return await list_played_lectures(admin_id=admin_id)

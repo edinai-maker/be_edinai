@@ -452,7 +452,7 @@ def _build_lecture_config_response(
     *,
     requested_language: Optional[str],
     requested_duration: Optional[int],
-    duration_options: Optional[List[int]] = None,
+    requested_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     settings = get_settings()
     default_language = settings.dict().get("default_language") or getattr(settings, "default_language", None)
@@ -481,6 +481,10 @@ def _build_lecture_config_response(
         if requested_duration is not None
         else configured_default_duration
     )
+     # Model selection: normalize and constrain to supported models
+    normalized_model = (requested_model or "").strip().lower() or None
+    default_model = SUPPORTED_MODELS[0]
+    selected_model = normalized_model if normalized_model in SUPPORTED_MODELS else default_model
 
     if selected_duration not in resolved_duration_options:
         selected_duration = resolved_duration_options[-1]
@@ -495,6 +499,7 @@ def _build_lecture_config_response(
         "selected_language": language_value,
         "selected_language_label": language_label,
         "video_duration_minutes": selected_duration,
+        "selected_model": selected_model,
         "default_model": default_model,
     }
 
@@ -2191,7 +2196,7 @@ async def post_lecture_generation_config(
     config_response = _build_lecture_config_response(
         requested_language=requested_language,
         requested_duration=requested_duration,
-        duration_options=allowed_durations,
+        requested_model=requested_model,
     )
 
     return {
