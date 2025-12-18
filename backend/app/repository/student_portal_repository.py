@@ -226,6 +226,17 @@ def get_student_profile_by_enrollment(enrollment_number: str) -> Optional[Dict[s
         cur.execute(query, {"enrollment_number": enrollment_number})
         return _row_to_profile(cur.fetchone())
 
+def delete_student_profile_by_enrollment(enrollment_number: str) -> bool:
+    query = (
+        "DELETE FROM student_profiles "
+        "WHERE LOWER(enrollment_number) = LOWER(%(enrollment_number)s) "
+        "RETURNING id"
+    )
+
+    with get_pg_cursor() as cur:
+        cur.execute(query, {"enrollment_number": enrollment_number})
+        return cur.fetchone() is not None
+
 
 def create_student_profile(**fields: Any) -> Dict[str, Any]:
     payload = {**fields}

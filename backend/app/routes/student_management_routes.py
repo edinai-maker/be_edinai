@@ -480,7 +480,11 @@ async def delete_roster_student(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found in roster")
 
-    return ResponseBase(status=True, message="Student removed from roster", data={"enrollment_number": normalized})
+    portal_repo.delete_student_profile_by_enrollment(normalized)
+
+    return ResponseBase(status=True, message="Student removed from roster and profile", data={"enrollment_number": normalized})
+
+
 
 
 def _strip_optional(value: Optional[str]) -> Optional[str]:
@@ -625,7 +629,7 @@ async def update_roster_student(
 
     if not updated_roster:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,     
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="Student not found in roster"
         )
 
