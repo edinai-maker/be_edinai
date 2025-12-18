@@ -93,7 +93,24 @@ def _row_to_account(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 def _row_to_profile(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if row is None:
         return None
-    return {column: row.get(column) for column in _PROFILE_COLUMNS}
+    data = {column: row.get(column) for column in _PROFILE_COLUMNS}
+
+    photo_path = data.get("photo_path")
+    if photo_path:
+        # Normalize stored filesystem path to a web URL path
+        # Examples:
+        #   "backend/uploads/..." -> "/uploads/..."
+        #   "./uploads/..."       -> "/uploads/..."
+        url_path = str(photo_path).replace("\\", "/")
+        if url_path.startswith("backend/"):
+            url_path = url_path[len("backend/"):]
+        if url_path.startswith("./"):
+            url_path = url_path[2:]
+        if not url_path.startswith("/"):
+            url_path = "/" + url_path
+        data["photo_path"] = url_path
+
+    return data
 
 
 def get_roster_entry(enrollment_number: str) -> Optional[Dict[str, Any]]:
