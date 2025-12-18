@@ -651,7 +651,7 @@ async def list_lectures(
 
         summary = {
             "lecture_id": row.get("lecture_uid"),
-            "title": record.get("title") or row.get("lecture_title"),
+            "title": record.get("title") or row.get("lecture_title") or "Untitled lecture",
             "language": record.get("language"),
             "total_slides": record.get("total_slides"),
             "estimated_duration": record.get("estimated_duration"),
@@ -776,7 +776,7 @@ async def search_lectures_by_title(
 
         summary = {
             "lecture_id": row.get("lecture_uid"),
-            "title": record.get("title") or row.get("lecture_title"),
+            "title": record.get("title") or row.get("lecture_title") or "Untitled lecture",
             "language": record.get("language"),
             "total_slides": record.get("total_slides"),
             "estimated_duration": record.get("estimated_duration"),
