@@ -31,6 +31,7 @@ def _normalize_database_url(raw_url) -> str:
 
 
 logger = logging.getLogger(__name__)
+_CHAPTER_SCHEMA_LOCK_ID = 0x4CAFEBABE
 
 
 def _retry_on_deadlock(max_retries: int = 3, base_delay: float = 0.5):
@@ -84,66 +85,71 @@ def get_db() -> Generator:
 def _ensure_chapter_material_schema() -> None:
     """Ensure chapter_materials has columns required by the ORM model."""
 
-    inspector = inspect(engine)
-    if "chapter_materials" not in inspector.get_table_names():
-        return
-
-    columns = {col["name"]: col for col in inspector.get_columns("chapter_materials")}
-    statements: list[str] = []
-
-    optional_columns = {}
-
-    for column_name, ddl in optional_columns.items():
-        if column_name not in columns:
-            logger.info("Adding missing %s column to chapter_materials table", column_name)
-            statements.append(ddl)
-
-
-    if "is_global" not in columns:
-        logger.info("Adding missing is_global column to chapter_materials table")
-        statements.append(
-            "ALTER TABLE chapter_materials ADD COLUMN is_global BOOLEAN DEFAULT FALSE"
+    with engine.begin() as connection:
+        # Acquire an advisory lock so only one worker performs schema updates at a time.
+        connection.execute(
+            text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": _CHAPTER_SCHEMA_LOCK_ID}
         )
+        try:
+            inspector = inspect(connection)
+            if "chapter_materials" not in inspector.get_table_names():
+                return
 
-    if "updated_at" not in columns:
-        logger.info("Adding missing updated_at column to chapter_materials table")
-        statements.append(
-            "ALTER TABLE chapter_materials ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW()"
-        )
-    else:
-        updated_default = columns["updated_at"].get("default")
-        if not updated_default:
-            logger.info("Setting default for chapter_materials.updated_at")
-            statements.append(
-                "ALTER TABLE chapter_materials ALTER COLUMN updated_at SET DEFAULT NOW()"
-            )
+            columns = {col["name"]: col for col in inspector.get_columns("chapter_materials")}
+            statements: list[str] = []
 
-    created_col = columns.get("created_at")
-    if created_col and not created_col.get("default"):
-        logger.info("Setting default for chapter_materials.created_at")
-        statements.append(
-            "ALTER TABLE chapter_materials ALTER COLUMN created_at SET DEFAULT NOW()"
-        )
+            optional_columns = {}
 
-    # Execute collected schema alteration statements (if any).
-    if statements:
-        with engine.begin() as connection:
+            for column_name, ddl in optional_columns.items():
+                if column_name not in columns:
+                    logger.info("Adding missing %s column to chapter_materials table", column_name)
+                    statements.append(ddl)
+
+            if "is_global" not in columns:
+                logger.info("Adding missing is_global column to chapter_materials table")
+                statements.append(
+                    "ALTER TABLE chapter_materials ADD COLUMN is_global BOOLEAN DEFAULT FALSE"
+                )
+
+            if "updated_at" not in columns:
+                logger.info("Adding missing updated_at column to chapter_materials table")
+                statements.append(
+                    "ALTER TABLE chapter_materials ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW()"
+                )
+            else:
+                updated_default = columns["updated_at"].get("default")
+                if not updated_default:
+                    logger.info("Setting default for chapter_materials.updated_at")
+                    statements.append(
+                        "ALTER TABLE chapter_materials ALTER COLUMN updated_at SET DEFAULT NOW()"
+                    )
+
+            created_col = columns.get("created_at")
+            if created_col and not created_col.get("default"):
+                logger.info("Setting default for chapter_materials.created_at")
+                statements.append(
+                    "ALTER TABLE chapter_materials ALTER COLUMN created_at SET DEFAULT NOW()"
+                )
+
             for stmt in statements:
                 connection.execute(text(stmt))
 
-    # Backfill any NULL timestamps and enforce NOT NULL on updated_at.
-    with engine.begin() as connection:
-        connection.execute(
-            text("UPDATE chapter_materials SET created_at = NOW() WHERE created_at IS NULL")
-        )
-        connection.execute(
-            text(
-                "UPDATE chapter_materials SET updated_at = COALESCE(updated_at, created_at, NOW())"
+            # Backfill any NULL timestamps and enforce NOT NULL on updated_at.
+            connection.execute(
+                text("UPDATE chapter_materials SET created_at = NOW() WHERE created_at IS NULL")
             )
-        )
-        connection.execute(
-            text("ALTER TABLE chapter_materials ALTER COLUMN updated_at SET NOT NULL")
-        )
+            connection.execute(
+                text(
+                    "UPDATE chapter_materials SET updated_at = COALESCE(updated_at, created_at, NOW())"
+                )
+            )
+            connection.execute(
+                text("ALTER TABLE chapter_materials ALTER COLUMN updated_at SET NOT NULL")
+            )
+        finally:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": _CHAPTER_SCHEMA_LOCK_ID}
+            )
 
 @_retry_on_deadlock(max_retries=3, base_delay=0.5)
 def _ensure_lecture_gen_core_columns() -> None:

@@ -212,22 +212,28 @@ def _build_queue_manager():
     settings = get_settings()
     backend = (settings.topic_extract_queue_backend or "memory").lower()
     if backend == "redis":
-        try:
-            redis_client = _create_redis_client()
-            logger.info(
-                "Topic extraction queue using Redis backend at %s:%s (db=%s)",
-                settings.redis_host if not settings.redis_url else "url",
-                settings.redis_port,
-                settings.redis_db,
+        if redis_async is None:
+            logger.warning(
+                "Topic extraction queue configured for Redis backend, but redis package is not installed. "
+                "Falling back to in-memory queue."
             )
-            return RedisTopicExtractionQueueManager(
-                redis_client,
-                max_workers=settings.topic_extract_max_workers,
-                poll_interval_ms=settings.topic_extract_queue_poll_interval_ms,
-                lease_seconds=settings.topic_extract_queue_lease_seconds,
-            )
-        except Exception as exc:
-            logger.exception("Failed to initialize Redis queue. Falling back to in-memory queue: %s", exc)
+        else:
+            try:
+                redis_client = _create_redis_client()
+                logger.info(
+                    "Topic extraction queue using Redis backend at %s:%s (db=%s)",
+                    settings.redis_host if not settings.redis_url else "url",
+                    settings.redis_port,
+                    settings.redis_db,
+                )
+                return RedisTopicExtractionQueueManager(
+                    redis_client,
+                    max_workers=settings.topic_extract_max_workers,
+                    poll_interval_ms=settings.topic_extract_queue_poll_interval_ms,
+                    lease_seconds=settings.topic_extract_queue_lease_seconds,
+                )
+            except Exception as exc:
+                logger.exception("Failed to initialize Redis queue. Falling back to in-memory queue: %s", exc)
 
     logger.info("Topic extraction queue using in-memory backend")
     return InMemoryTopicExtractionQueueManager(
