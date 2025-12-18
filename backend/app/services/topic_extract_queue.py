@@ -193,19 +193,24 @@ def _create_redis_client():
     if settings.redis_url:
         return redis_async.Redis.from_url(
             settings.redis_url,
-            ssl=settings.redis_ssl or False,
             encoding=None,
             decode_responses=False,
         )
-    return redis_async.Redis(
-        host=settings.redis_host,
-        port=settings.redis_port,
-        db=settings.redis_db,
-        password=settings.redis_password,
-        ssl=settings.redis_ssl,
-        encoding=None,
-        decode_responses=False,
-    )
+    connection_kwargs = {
+        "host": settings.redis_host,
+        "port": settings.redis_port,
+        "db": settings.redis_db,
+        "password": settings.redis_password,
+        "encoding": None,
+        "decode_responses": False,
+    }
+    if settings.redis_ssl:
+        try:
+            ssl_connection_cls = redis_async.connection.SSLConnection
+        except AttributeError as exc:
+            raise RuntimeError("Installed redis client does not support SSL connections") from exc
+        connection_kwargs["connection_class"] = ssl_connection_cls
+    return redis_async.Redis(**connection_kwargs)
 
 
 def _build_queue_manager():
