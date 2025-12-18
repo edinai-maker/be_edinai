@@ -27,6 +27,53 @@ class TopicExtractionQueueTimeoutError(TopicExtractionQueueError):
     """Raised when waiting for an available worker times out."""
 
 
+class HybridTopicExtractionQueueManager:
+    """
+    Wraps a primary queue backend with an automatic fallback.
+
+    If the primary backend raises a runtime/connection error, the fallback manager is used
+    for the rest of the process lifetime to avoid repeated failures.
+    """
+
+    def __init__(
+        self,
+        *,
+        primary: Optional["BaseTopicExtractionQueueManager"],
+        fallback: "BaseTopicExtractionQueueManager",
+    ) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._using_fallback = primary is None
+
+    async def _acquire_with_primary(self):
+        assert self._primary is not None
+        async with self._primary.acquire():
+            yield
+
+    @asynccontextmanager
+    async def acquire(self) -> AsyncIterator[None]:
+        if not self._using_fallback and self._primary is not None:
+            try:
+                async with self._primary.acquire():
+                    yield
+                    return
+            except TopicExtractionQueueError as exc:
+                if isinstance(exc, (TopicExtractionQueueFullError, TopicExtractionQueueTimeoutError)):
+                    raise
+                logger.warning(
+                    "Primary topic extraction queue backend failed (%s). Falling back to in-memory queue.",
+                    exc,
+                )
+                self._using_fallback = True
+        async with self._fallback.acquire():
+            yield
+
+    async def get_metrics(self) -> Dict[str, int]:
+        if self._using_fallback or self._primary is None:
+            return await self._fallback.get_metrics()
+        return await self._primary.get_metrics()
+
+
 class InMemoryTopicExtractionQueueManager:
     """Simple in-memory queue controller for topic extraction workloads."""
 
@@ -216,6 +263,12 @@ def _create_redis_client():
 def _build_queue_manager():
     settings = get_settings()
     backend = (settings.topic_extract_queue_backend or "memory").lower()
+    fallback_manager = InMemoryTopicExtractionQueueManager(
+        max_workers=settings.topic_extract_max_workers,
+        queue_limit=settings.topic_extract_queue_limit,
+        timeout_seconds=settings.topic_extract_queue_timeout_seconds,
+    )
+    primary_manager: Optional[InMemoryTopicExtractionQueueManager] = None
     if backend == "redis":
         if redis_async is None:
             logger.warning(
@@ -231,7 +284,7 @@ def _build_queue_manager():
                     settings.redis_port,
                     settings.redis_db,
                 )
-                return RedisTopicExtractionQueueManager(
+                primary_manager = RedisTopicExtractionQueueManager(
                     redis_client,
                     max_workers=settings.topic_extract_max_workers,
                     poll_interval_ms=settings.topic_extract_queue_poll_interval_ms,
@@ -239,13 +292,11 @@ def _build_queue_manager():
                 )
             except Exception as exc:
                 logger.exception("Failed to initialize Redis queue. Falling back to in-memory queue: %s", exc)
-
+    if primary_manager:
+        logger.info("Topic extraction queue initialized with Redis backend (in-memory fallback ready)")
+        return HybridTopicExtractionQueueManager(primary=primary_manager, fallback=fallback_manager)
     logger.info("Topic extraction queue using in-memory backend")
-    return InMemoryTopicExtractionQueueManager(
-        max_workers=settings.topic_extract_max_workers,
-        queue_limit=settings.topic_extract_queue_limit,
-        timeout_seconds=settings.topic_extract_queue_timeout_seconds,
-    )
+    return fallback_manager
 
 
 topic_extraction_queue = _build_queue_manager()
