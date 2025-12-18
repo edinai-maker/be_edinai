@@ -537,50 +537,90 @@ async def delete_shared_lecture(
 
 
 @router.get(
+
     "/search",
+
     response_model=LectureListResponse,
+
     summary="Search lectures by title",
+
     description="Search lectures for the authenticated admin by title. Supports Gujarati titles and WhatsApp-style Roman queries via backend normalization.",
+
 )
+
 async def search_lectures(
+
     title: str = Query(..., description="Lecture title or keywords to search"),
+
     language: Optional[str] = Query(None, description="Filter by language"),
+
     std: Optional[str] = Query(None, description="Filter by standard/class"),
+
+
     subject: Optional[str] = Query(None, description="Filter by subject"),
+
     division: Optional[str] = Query(None, description="Filter by division/section"),
+
     limit: int = Query(100, ge=1, le=500, description="Maximum results"),
+
     offset: int = Query(0, ge=0, description="Pagination offset"),
+
     current_user: Dict[str, Any] = Depends(get_current_user),
+
     repository: LectureRepository = Depends(get_repository),
+
 ) -> LectureListResponse:
+
     try:
+
         # Extract admin_id: for admins it's in "id", for members it's in "admin_id"
+
         if current_user.get("role") == "admin":
+
             admin_id = current_user.get("id")
+
         else:
+
             admin_id = current_user.get("admin_id")
 
+
+
         lectures = await repository.search_lectures_by_title(
+
             query=title,
+
             language=language,
+
             std=std,
+
             subject=subject,
+
             division=division,
+
             limit=limit,
+
             offset=offset,
             admin_id=admin_id,
-        )
+
+        ) 
+
         lecture_summaries = [LectureSummaryResponse(**lecture) for lecture in lectures]
         return LectureListResponse(
             status=True,
             message="Lecture search fetched successfully",
             data=lecture_summaries,
-        )
+     )
+
+
 
     except Exception as e:
+
         raise HTTPException(
+
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+
             detail=f"Error searching lectures: {str(e)}",
+
         )
 
 
