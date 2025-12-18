@@ -135,6 +135,7 @@ DEFAULT_MIN_DURATION = 5
 DEFAULT_MAX_DURATION = 180
 MAX_ASSISTANT_SUGGESTIONS = 10
 DEFAULT_LANGUAGE_CODE = "eng"
+SUPPORTED_MODELS = ["inai", "vinai", "aira"]
 
 MERGED_LECTURES_DIR = Path("./storage/merged_lectures")
 
@@ -490,6 +491,7 @@ def _build_lecture_config_response(
         "selected_language": language_value,
         "selected_language_label": language_label,
         "video_duration_minutes": selected_duration,
+        "default_model": default_model,
     }
 
 
@@ -2143,6 +2145,7 @@ async def post_lecture_generation_config(
 
     requested_language = _normalize_requested_language(payload.language) or payload.language
     requested_duration = _normalize_requested_duration(payload.duration) if payload.duration is not None else payload.duration
+    requested_model = (payload.model or None)
     
     if payload.merged_id:
         merged_payload = _load_merged_lecture_payload(payload.merged_id)

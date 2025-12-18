@@ -301,6 +301,134 @@ def _normalize_title_for_fuzzy_match(value: str) -> str:
             tokens.append(stripped)
     return " ".join(tokens)
 
+async def search_lectures_by_title(
+    *,
+    query: str,
+    language: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    std: Optional[str] = None,
+    subject: Optional[str] = None,
+    division: Optional[str] = None,
+    admin_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Search lectures by title using Gujarati-aware normalization.
+
+    The search is performed in Python to allow matching Gujarati titles against
+    WhatsApp-style Roman queries using [_normalize_title_for_search](cci:1://file:///d:/final-code-main2/backend/app/repository/lecture_repository.py:178:0-208:27).
+    """
+
+    normalized_query = _normalize_title_for_search(query)
+    if not normalized_query:
+        return []
+
+    # Fuzzy representation (vowels stripped) to allow loose transliteration matches
+    fuzzy_query = _normalize_title_for_fuzzy_match(normalized_query)
+
+    with get_pg_cursor() as cur:
+        sql = "SELECT * FROM lecture_gen"
+        params: Dict[str, Any] = {}
+
+        if admin_id is not None:
+            sql += " WHERE admin_id = %(admin_id)s"
+            params["admin_id"] = admin_id
+
+        sql += " ORDER BY created_at DESC"
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    std_filter = _slugify(std) if std else None
+    subject_filter = _slugify(subject) if subject else None
+    division_filter = _slugify(division) if division else None
+    lang_filter = (language or "").lower() if language else None
+
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        if not row.get("lecture_data"):
+            continue
+        record = _clone_record(row.get("lecture_data"))
+        metadata = record.get("metadata") or {}
+
+        if lang_filter and (record.get("language") or "").lower() != lang_filter:
+            continue
+
+        std_value = metadata.get("std") or metadata.get("class") or row.get("std") or "general"
+        subject_value = metadata.get("subject") or row.get("subject") or "lecture"
+        division_value = metadata.get("division") or metadata.get("section")
+
+        if std_filter and _slugify(std_value) != std_filter:
+            continue
+        if subject_filter and _slugify(subject_value) != subject_filter:
+            continue
+        if division_filter and _slugify(division_value) != division_filter:
+            continue
+
+        title_value = record.get("title") or row.get("lecture_title") or ""
+        normalized_title = _normalize_title_for_search(title_value)
+        if not normalized_title:
+            continue
+
+        # First, try a direct raw substring match to support exact Hindi/Gujarati
+        # script queries matching the stored title.
+        raw_title = str(title_value or "").strip().lower()
+        raw_query = str(query or "").strip().lower()
+
+        if raw_query and raw_query not in raw_title:
+            # If raw match fails, fall back to strict normalized and then fuzzy match.
+            # First try strict substring match on normalized forms (supports partial matches).
+            if normalized_query not in normalized_title:
+                # Fall back to fuzzy consonant-pattern matching for loose transliteration
+                fuzzy_title = _normalize_title_for_fuzzy_match(normalized_title)
+                if fuzzy_query:
+                    any_token_match = False
+                    for token in fuzzy_query.split(" "):
+                        token = token.strip()
+                        if not token:
+                            continue
+                        if token in fuzzy_title:
+                            any_token_match = True
+                            break
+                    if not any_token_match:
+                        continue
+                else:
+                    # No fuzzy query constructed and strict match failed
+                    continue
+
+        summary = {
+            "lecture_id": row.get("lecture_uid"),
+            "title": record.get("title") or row.get("lecture_title"),
+            "language": record.get("language"),
+            "total_slides": record.get("total_slides"),
+            "estimated_duration": record.get("estimated_duration"),
+            "created_at": record.get("created_at"),
+            "fallback_used": record.get("fallback_used", False),
+            "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
+            "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
+            "std": std_value,
+            "subject": subject_value,
+            "division": division_value,
+            "std_slug": _slugify(std_value),
+            "subject_slug": _slugify(subject_value),
+            "division_slug": _slugify(division_value) if division_value else None,
+        }
+
+        slides = record.get("slides") or []
+        bullets: List[str] = []
+        for slide in slides:
+            if not isinstance(slide, dict):
+                continue
+            for bullet in slide.get("bullets") or []:
+                text = (bullet or "").strip()
+                if text:
+                    bullets.append(text)
+
+        summary["bullets"] = bullets
+        results.append(summary)
+
+    return results[offset : offset + limit]
+
+
+
 
 def _sort_key(value: str) -> Tuple[int, str]:
     """Sort numerically when possible, otherwise lexicographically."""

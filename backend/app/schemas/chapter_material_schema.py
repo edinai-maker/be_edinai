@@ -13,6 +13,7 @@ class LectureConfigRequest(BaseModel):
     merged_id: Optional[str] = Field(default=None)
     language: Optional[str] = Field(default=None)
     duration: Optional[int] = Field(default=None, ge=5, le=180)
+    model: Optional[str] = Field(default=None)
 
 
 class LectureGenerationRequest(BaseModel):

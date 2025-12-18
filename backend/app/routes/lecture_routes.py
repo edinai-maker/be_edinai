@@ -584,8 +584,6 @@ async def search_lectures(
         )
 
 
-
-
 @router.get(
     "/{lecture_id}",
     response_model=LectureResponse,

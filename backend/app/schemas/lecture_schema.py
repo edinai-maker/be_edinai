@@ -87,6 +87,13 @@ class SharedLectureSummary(BaseModel):
     last_shared_at: Optional[datetime] = None
     cover_photo_url: Optional[str] = None
 
+
+class LectureListResponse(BaseModel):
+    status: bool
+    message: str
+    data: List[LectureSummaryResponse]
+
+
 class AnswerResponse(BaseModel):
     answer: Optional[str]
     edited_content: Optional[str] = None
