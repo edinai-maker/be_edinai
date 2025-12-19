@@ -205,6 +205,8 @@ async def share_lecture(
 async def share_lecture_recording(
     lecture_id: str,
     file: UploadFile = File(...),
+    std: Optional[str] = Form(None),
+    division: Optional[str] = Form(None),
     current_user: Dict[str, Any] = Depends(member_required(WorkType.LECTURE)),
     share_service: LectureShareService = Depends(get_share_service),
 ) -> Dict[str, Any]:
@@ -285,8 +287,15 @@ async def share_lecture_recording(
     else:
         cover_photo_url_value = None
 
+    normalized_std: Optional[str] = None
+    if isinstance(std, str):
+        stripped_std = std.strip()
+        if stripped_std:
+            normalized_std = stripped_std
+
     resolved_subject = share_service._resolve_subject(
         request_subject=None,
+        request_std=normalized_std or "",
         row=lecture_row,
         record=lecture_record,
     )
@@ -325,7 +334,7 @@ async def share_lecture_recording(
                     return nested
         return None
 
-    std_candidate = _extract_display_std(metadata) or _extract_display_std(lecture_record)
+    std_candidate = normalized_std or _extract_display_std(metadata) or _extract_display_std(lecture_record)
     if not std_candidate and isinstance(resolved_std, str) and resolved_std.strip():
         std_candidate = resolved_std.strip()
     if not std_candidate:
@@ -484,12 +493,26 @@ async def share_lecture_recording(
     if isinstance(video_record, dict):
         video_record["cover_photo_url"] = cover_photo_url_value or thumbnail_url_value
 
+    response_std = normalized_std or std_value
+
+    response_division: Optional[str] = None
+    if isinstance(division, str):
+        trimmed_division = division.strip()
+        if trimmed_division:
+            response_division = trimmed_division
+
+    # Ensure std and division are present inside nested video payload
+    if isinstance(video_record, dict):
+        if response_std is not None:
+            video_record["std"] = response_std
+        if response_division is not None:
+            video_record["division"] = response_division
+
     return {
         "status": True,
         "message": "Recording uploaded and shared to student portal successfully",
         "data": {
             "lecture_id": lecture_id,
-            "std": std_value,
             "video": video_record,
         },
     }
