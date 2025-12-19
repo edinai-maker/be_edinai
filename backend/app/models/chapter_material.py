@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, func, JSON
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, func, JSON, Text
 
 from app.database import Base
 
@@ -45,6 +45,35 @@ class ChapterMaterial(Base):
             "updated_at": self.updated_at,
         }
 
+class LectureChatbot(Base):
+    """Store chat interactions and audio assets generated for lectures."""
+    __tablename__ = "lecture_chatbot"
+    id = Column(Integer, primary_key=True, index=True)
+    lecture_id = Column(String(64), nullable=False, index=True)
+    question = Column(Text, nullable=True)
+    response_text = Column(Text, nullable=True)
+    audio_url = Column(String(512), nullable=True)
+    language = Column(String(64), nullable=True)
+    extra_data = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "lecture_id": self.lecture_id,
+            "question": self.question,
+            "response_text": self.response_text,
+            "audio_url": self.audio_url,
+            "language": self.language,
+            "extra_data": self.extra_data,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
 
 class LectureGen(Base):
     """Model for storing generated lectures"""

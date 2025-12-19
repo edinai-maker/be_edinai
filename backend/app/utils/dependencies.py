@@ -73,10 +73,10 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_security),
-) -> Dict[str, Any]:
-    payload = verify_token(credentials.credentials)
+def _resolve_user_payload(token: str) -> Dict[str, Any]:
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+    payload = verify_token(token)
     role = payload.get("role")
     user_id = payload.get("id")
 
@@ -131,6 +131,14 @@ def get_current_user(
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid user role")
 
+def resolve_user_from_token(token: str) -> Dict[str, Any]:
+    """Utility for non-request contexts (e.g., Socket.IO handshake)."""
+    return _resolve_user_payload(token)
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(_security),
+) -> Dict[str, Any]:
+    return _resolve_user_payload(credentials.credentials)
 
 def admin_required(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     if current_user["role"] != "admin":

@@ -5,6 +5,7 @@ import logging
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ from app.config import get_settings
 from app.repository.lecture_repository import LectureRepository
 from app.services.lecture_generation_service import GroqService
 from app.services.tts_service import GoogleTTSService
-
+from app.utils.s3_file_handler import get_s3_service
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class LectureService:
             storage_root=storage_root,
             credentials_path=getattr(settings, "gcp_tts_credentials_path", None),
         )
+        self._s3_service = get_s3_service(settings)
         self._public_base_url = (
             settings.public_base_url.rstrip("/") if getattr(settings, "public_base_url", None) else None
         )
@@ -108,8 +110,10 @@ class LectureService:
         answer_type: Optional[str] = None,
         is_edit_command: bool = False,
         context_override: Optional[str] = None,
+        lecture_record: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        record = await self._repository.get_lecture(lecture_id)
+
+        record = lecture_record or await self._repository.get_lecture(lecture_id)
         context = context_override or record.get("context", "")
         language = record.get("language", "English")
 
@@ -223,14 +227,14 @@ class LectureService:
         
         return self._sanitize_audio_metadata(record)
 
-    def _build_audio_url(self, lecture_id: str, filename: str) -> str:
-        relative_url = f"/chapter-materials/chapter_lecture/audio/{lecture_id}/{filename}"
+    def _build_audio_url(self, lecture_id: str, filename: str, *, subfolder: str = "audio") -> str:
+        relative_url = f"/chapter-materials/chapter_lecture/{subfolder}/{lecture_id}/{filename}"
         if self._public_base_url:
             return f"{self._public_base_url}{relative_url}"
         return relative_url
 
-    def _build_audio_download_url(self, lecture_id: str, filename: str) -> str:
-        relative_url = f"/chapter-materials/chapter_lecture/audio/{lecture_id}/{filename}/download"
+    def _build_audio_download_url(self, lecture_id: str, filename: str, *, subfolder: str = "audio") -> str:
+        relative_url = f"/chapter-materials/chapter_lecture/{subfolder}/{lecture_id}/{filename}/download"
         if self._public_base_url:
             return f"{self._public_base_url}{relative_url}"
         return relative_url
@@ -244,6 +248,85 @@ class LectureService:
             if isinstance(slide, dict):
                 slide.pop("audio_path", None)
         return sanitized
+        
+    async def synthesize_chat_answer_audio(
+        self,
+        *,
+        lecture_id: str,
+        text: str,
+        language: Optional[str] = None,
+    ) -> Optional[str]:
+        """Generate a short audio clip for an assistant response, upload to S3, and return URL."""
+        normalized_text = (text or "").strip()
+        if not normalized_text:
+            return None
+        filename = f"chat-{uuid4().hex}.mp3"
+        try:
+            audio_path = await self._tts_service.synthesize_text(
+                lecture_id=str(lecture_id),
+                text=normalized_text,
+                language=language or "English",
+                filename=filename,
+                subfolder="chat",
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("Chat TTS failed for lecture %s: %s", lecture_id, exc)
+            return None
+        if not audio_path:
+            return None
+        try:
+            audio_bytes = audio_path.read_bytes()
+
+        except OSError as exc:
+            logger.error("Failed reading synthesized chat audio for %s: %s", lecture_id, exc)
+            return None
+        s3_folder = f"audio/chat/{lecture_id}"
+        try:
+            upload_result = self._s3_service.upload_file(
+                file_content=audio_bytes,
+                file_name=filename,
+                folder=s3_folder,
+                content_type="audio/mpeg",
+                public=True,
+            )
+        except Exception as exc:
+            logger.warning("Uploading chat audio to S3 failed for lecture %s: %s", lecture_id, exc)
+            return None
+        finally:
+            try:
+                audio_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return upload_result.get("s3_url")
+
+    async def save_chat_interaction(
+        self,
+        *,
+        lecture_id: str,
+        question: Optional[str],
+        response_text: Optional[str],
+        audio_url: Optional[str],
+        language: Optional[str],
+        extra_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Persist chatbot exchange for a lecture."""
+        return await self._repository.create_chatbot_entry(
+            lecture_id=lecture_id,
+            question=question,
+            response_text=response_text,
+            audio_url=audio_url,
+            language=language,
+            extra_data=extra_data,
+        )
+    def build_pause_prompt_message(self, language: str = "English") -> str:
+        """Return a localized pause/resume prompt shown when the lecture is paused."""
+        normalized = (language or "English").strip().lower()
+        templates = {
+            "hindi": "कृपया आगे बढ़ने के लिए तैयार हों। क्या आप अगले भाग के लिए तैयार हैं?",
+            "gujarati": "મહેરબાની કરીને આગળનો ભાગ શરૂ કરવા તૈયાર રહો. શું તમે તૈયાર છો?",
+            "english": "Please get ready to continue. Let me know when you want to resume.",
+        }
+        return templates.get(normalized, templates["english"])
 
     def _compose_slide_tts_text(self, slide: Dict[str, Any], *, language: str = "English") -> str:
         """Build a narration string that includes title, bullets, narration, and questions."""

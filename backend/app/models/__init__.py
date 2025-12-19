@@ -3,7 +3,7 @@
 from .user import User
 from .student import Student
 from .teacher import Teacher
-from .chapter_material import ChapterMaterial, LectureGen
+from .chapter_material import ChapterMaterial, LectureGen, LectureChatbot
 
 __all__ = [
     "User",
@@ -11,4 +11,5 @@ __all__ = [
     "Teacher",
     "ChapterMaterial",
     "LectureGen",
+    "LectureChatbot",
 ]

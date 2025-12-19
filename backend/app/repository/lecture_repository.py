@@ -1191,6 +1191,37 @@ async def get_source_text(lecture_id: str) -> str:
         raise FileNotFoundError(f"Source text not found for lecture {lecture_id}")
     return source_text
 
+async def create_chatbot_entry(
+    *,
+    lecture_id: str,
+    question: Optional[str],
+    response_text: Optional[str],
+    audio_url: Optional[str],
+    language: Optional[str],
+    extra_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Persist a lecture chatbot interaction."""
+    payload = {
+        "lecture_id": lecture_id,
+        "question": question,
+        "response_text": response_text,
+        "audio_url": audio_url,
+        "language": language,
+        "extra_data": json.dumps(extra_data or {}),
+    }
+    with get_pg_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO lecture_chatbot
+                (lecture_id, question, response_text, audio_url, language, extra_data)
+            VALUES
+                (%(lecture_id)s, %(question)s, %(response_text)s, %(audio_url)s, %(language)s, %(extra_data)s)
+            RETURNING *;
+            """,
+            payload,
+        )
+        row = cur.fetchone()
+    return row or payload
 
 class LectureRepository:
     """Compatibility wrapper preserving the legacy repository interface."""
@@ -1243,52 +1274,28 @@ class LectureRepository:
             admin_id=admin_id,
         )
 
-
     async def search_lectures_by_title(
         self,
-
         *,
-
         query: str,
-
         language: Optional[str] = None,
-
         limit: int = 100,
-
         offset: int = 0,
-
         std: Optional[str] = None,
-
         subject: Optional[str] = None,
-
         division: Optional[str] = None,
-
         admin_id: Optional[int] = None,
-
     ) -> List[Dict[str, Any]]:
-
         return await search_lectures_by_title(
-
             query=query,
-
             language=language,
-
             limit=limit,
-
             offset=offset,
-
             std=std,
-
             subject=subject,
-
             division=division,
-
             admin_id=admin_id,
-
         )
-
-
-
 
     async def list_played_lectures(self, admin_id: Optional[int] = None) -> List[Dict[str, Any]]:
         return await list_played_lectures(admin_id=admin_id)
@@ -1307,3 +1314,23 @@ class LectureRepository:
 
     async def get_source_text(self, lecture_id: str) -> str:
         return await get_source_text(lecture_id)
+
+    async def create_chatbot_entry(
+        self,
+        *,
+        lecture_id: str,
+        question: Optional[str],
+        response_text: Optional[str],
+        audio_url: Optional[str],
+        language: Optional[str],
+        extra_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return await create_chatbot_entry(
+            lecture_id=lecture_id,
+            question=question,
+            response_text=response_text,
+            audio_url=audio_url,
+            language=language,
+            extra_data=extra_data,
+        )
+
