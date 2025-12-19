@@ -2199,6 +2199,7 @@ async def post_lecture_generation_config(
         duration_options=allowed_durations,
         requested_model=requested_model,
     )
+    config_response["merged_id"] = payload.merged_id
 
     return {
         "status": True,
