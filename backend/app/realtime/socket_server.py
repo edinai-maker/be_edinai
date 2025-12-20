@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Iterable, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterable, Optional
 from urllib.parse import parse_qs
 
 import socketio
 
 from ..config import settings
+from ..database import SessionLocal
 from ..services import student_portal_service
+from ..services.lecture_service import LectureService
+from ..utils.dependencies import resolve_user_from_token
 from ..utils.student_token import decode_student_token
 from fastapi import HTTPException
 
@@ -33,6 +37,8 @@ sio = socketio.AsyncServer(
 _ACTIVE_CLIENTS: Dict[str, Dict[str, object]] = {}
 # enrollment_number -> set of active sids
 _STUDENT_CONNECTIONS: Dict[str, set[str]] = {}
+_LECTURE_CLIENTS: Dict[str, Dict[str, Any]] = {}
+LECTURE_NAMESPACE = "/lecture-player"
 
 
 def _personal_room(admin_id: int, enrollment_number: str) -> str:
@@ -262,6 +268,184 @@ async def handle_presence_request(sid: str) -> None:
     online = [other for other, sids in _STUDENT_CONNECTIONS.items() if sids]
     await sio.emit("presence:snapshot", {"online": online}, room=sid)
     await _broadcast_presence(context, enrollment, "online")
+
+
+@contextmanager
+def _lecture_service_context() -> Iterable[LectureService]:
+    db = SessionLocal()
+    try:
+        yield LectureService(db=db)
+    finally:
+        db.close()
+
+
+@sio.event(namespace=LECTURE_NAMESPACE)
+async def connect(sid: str, environ: dict, auth: dict | None = None) -> None:
+    query_string: bytes = environ.get("asgi.scope", {}).get("query_string", b"")
+    params = parse_qs(query_string.decode())
+    token = params.get("token", [""])[0]
+    if not token and auth:
+        token = auth.get("token", "")
+
+    if not token:
+        raise ConnectionRefusedError("unauthorized")
+
+    try:
+        user = resolve_user_from_token(token)
+    except HTTPException as exc:  # pragma: no cover - rejected handshake
+        raise ConnectionRefusedError(exc.detail or "unauthorized") from exc
+
+    if user["role"] not in {"admin", "member"}:
+        raise ConnectionRefusedError("forbidden")
+
+    _LECTURE_CLIENTS[sid] = {"user": user}
+    logger.info("Lecture socket connected: sid=%s role=%s id=%s", sid, user["role"], user["id"])
+
+
+@sio.event(namespace=LECTURE_NAMESPACE)
+async def disconnect(sid: str) -> None:
+    if _LECTURE_CLIENTS.pop(sid, None):
+        logger.info("Lecture socket disconnected: sid=%s", sid)
+
+
+async def _emit_lecture_prompt(sid: str, payload: Dict[str, Any]) -> None:
+    await sio.emit("lecture:prompt", payload, room=sid, namespace=LECTURE_NAMESPACE)
+
+
+@sio.on("lecture:pause_prompt", namespace=LECTURE_NAMESPACE)
+async def handle_pause_prompt(sid: str, data: dict | None) -> None:
+    session = _LECTURE_CLIENTS.get(sid)
+    if not session:
+        return
+
+    lecture_id = str((data or {}).get("lecture_id") or "").strip()
+    if not lecture_id:
+        return
+
+    try:
+        with _lecture_service_context() as lecture_service:
+            record = await lecture_service.repository.get_lecture(lecture_id)
+            language = record.get("language", "English")
+            message = lecture_service.build_pause_prompt_message(language)
+
+            payload = {
+                "lecture_id": lecture_id,
+                "message": message,
+                "language": language,
+            }
+
+            audio_url = await lecture_service.synthesize_chat_answer_audio(
+                lecture_id=lecture_id,
+                text=message,
+                language=language,
+            )
+            if audio_url:
+                payload["audio_url"] = audio_url
+
+            await _emit_lecture_prompt(sid, payload)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Pause prompt failed: %s", exc)
+
+
+@sio.on("lecture:chat", namespace=LECTURE_NAMESPACE)
+async def handle_lecture_chat(sid: str, data: dict | None) -> None:
+    session = _LECTURE_CLIENTS.get(sid)
+    if not session:
+        await sio.emit(
+            "lecture:error",
+            {"error": "Unauthorized session"},
+            room=sid,
+            namespace=LECTURE_NAMESPACE,
+        )
+        return
+
+    lecture_id = str((data or {}).get("lecture_id") or "").strip()
+    question = str((data or {}).get("question") or "").strip()
+    answer_type = (data or {}).get("answer_type")
+
+    if not lecture_id or not question:
+        await sio.emit(
+            "lecture:error",
+            {"error": "Lecture ID and question are required"},
+            room=sid,
+            namespace=LECTURE_NAMESPACE,
+        )
+        return
+
+    payload: Dict[str, Any] | None = None
+
+    try:
+        with _lecture_service_context() as lecture_service:
+            lecture_record = await lecture_service.repository.get_lecture(lecture_id)
+            answer = await lecture_service.answer_question(
+                lecture_id=lecture_id,
+                question=question,
+                answer_type=answer_type,
+                lecture_record=lecture_record,
+            )
+
+            payload = answer if isinstance(answer, dict) else {"answer": answer}
+            payload["lecture_id"] = lecture_id
+
+            assistant_text = str(
+                payload.get("answer")
+                or payload.get("display_text")
+                or payload.get("message")
+                or payload.get("content")
+                or ""
+            ).strip()
+            language = lecture_record.get("language") if isinstance(lecture_record, dict) else None
+            audio_url: Optional[str] = None
+            if assistant_text:
+                audio_url = await lecture_service.synthesize_chat_answer_audio(
+                    lecture_id=lecture_id,
+                    text=assistant_text,
+                    language=language or payload.get("language"),
+                )
+                if audio_url:
+                    payload["audio_url"] = audio_url
+
+            try:
+                await lecture_service.save_chat_interaction(
+                    lecture_id=lecture_id,
+                    question=question,
+                    response_text=assistant_text or payload.get("answer") or payload.get("message"),
+                    audio_url=audio_url,
+                    language=language or payload.get("language"),
+                    extra_data=payload,
+                )
+            except Exception as exc:  # pragma: no cover - persistence failures shouldn't break chat
+                logger.warning("Failed to persist lecture chat for %s: %s", lecture_id, exc)
+    except FileNotFoundError:
+        await sio.emit(
+            "lecture:error",
+            {"error": "Lecture not found", "lecture_id": lecture_id},
+            room=sid,
+            namespace=LECTURE_NAMESPACE,
+        )
+        return
+    except RuntimeError as exc:
+        await sio.emit(
+            "lecture:error",
+            {"error": str(exc) or "Service unavailable"},
+            room=sid,
+            namespace=LECTURE_NAMESPACE,
+        )
+        return
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Lecture chat failed: %s", exc)
+        await sio.emit(
+            "lecture:error",
+            {"error": "Unable to process request"},
+            room=sid,
+            namespace=LECTURE_NAMESPACE,
+        )
+        return
+
+    if payload is None:
+        payload = {"lecture_id": lecture_id, "answer": ""}
+
+    await sio.emit("lecture:reply", payload, room=sid, namespace=LECTURE_NAMESPACE)
 
 
 __all__ = ["sio", "broadcast_chat_message"]
