@@ -54,6 +54,7 @@ class LectureGenerationRequest(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
+
 class LectureLookupRequest(BaseModel):
     std: str = Field(..., description="Class/standard identifier")
     subject: str = Field(..., description="Subject name")
