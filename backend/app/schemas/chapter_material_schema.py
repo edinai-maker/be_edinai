@@ -55,6 +55,29 @@ class LectureGenerationRequest(BaseModel):
         allow_population_by_field_name = True
 
 
+class LectureChatRequest(BaseModel):
+    question: str = Field(..., min_length=1)
+    answer_type: Optional[str] = Field(
+        default=None,
+        description="Optional format hint (e.g., summary, bullets).",
+    )
+    is_edit_command: bool = Field(
+        default=False,
+        description="Whether the question should be treated as an edit instruction.",
+    )
+    context_override: Optional[str] = Field(
+        default=None,
+        description="Optional custom context that overrides stored lecture content.",
+    )
+
+    @validator("question")
+    def strip_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Question cannot be empty")
+        return cleaned
+
+
 class LectureLookupRequest(BaseModel):
     std: str = Field(..., description="Class/standard identifier")
     subject: str = Field(..., description="Subject name")
