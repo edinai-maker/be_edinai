@@ -480,15 +480,17 @@ def _build_lecture_config_response(
     selected_duration = requested_duration if requested_duration is not None else configured_default_duration
 
     # Model selection: normalize and constrain to supported models
-    normalized_model = (requested_model or "").strip().lower() or None
-    selected_model = normalized_model if normalized_model in SUPPORTED_MODELS else None
+    normalized_model = _normalize_requested_model(requested_model)
+    selected_model = normalized_model
 
     if selected_duration not in resolved_duration_options:
         selected_duration = resolved_duration_options[-1]
 
-    default_model = getattr(settings, "default_lecture_model", None)
-    if default_model not in SUPPORTED_MODELS:
-        default_model = SUPPORTED_MODELS[0]
+    configured_default_model = (
+        getattr(settings, "default_lecture_model", None)
+        or settings.dict().get("default_lecture_model")
+    )
+    default_model = _normalize_requested_model(configured_default_model) or SUPPORTED_MODELS[0]
 
     if selected_model is None:
         selected_model = default_model
@@ -519,6 +521,27 @@ def _normalize_requested_duration(value: Optional[int]) -> Optional[int]:
     if normalized < DEFAULT_MIN_DURATION or normalized > DEFAULT_MAX_DURATION:
         return None
     return normalized
+
+
+def _normalize_requested_model(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return normalized if normalized in SUPPORTED_MODELS else None
+
+
+def _resolve_model_selection(value: Optional[str], settings: Any) -> str:
+    normalized = _normalize_requested_model(value)
+    if normalized:
+        return normalized
+
+    configured_default_model = (
+        getattr(settings, "default_lecture_model", None)
+        or settings.dict().get("default_lecture_model")
+    )
+    return _normalize_requested_model(configured_default_model) or SUPPORTED_MODELS[0]
 
 def _save_merged_lecture_payload(lecture_id: str, payload: Dict[str, Any]) -> None:
     MERGED_LECTURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -648,6 +671,8 @@ def _prepare_generation_from_material(
     material_std = material.get("std") if isinstance(material, dict) else material.std
     material_admin_id = material.get("admin_id") if isinstance(material, dict) else material.admin_id
     
+    selected_model = _resolve_model_selection(request.model, settings)
+
     metadata = {
         "material_id": material_id,
         "material_subject": material_subject,
@@ -661,6 +686,7 @@ def _prepare_generation_from_material(
         "requested_language": override_language,
         "requested_duration": override_duration,
         "admin_id": material_admin_id,
+        "model": selected_model,
     }
 
     std_value = material_std or "general"
@@ -703,6 +729,7 @@ def _prepare_generation_from_material(
         },
         "requested_language": override_language,
         "requested_duration": override_duration,
+        "model": selected_model,
     }
 
 
@@ -837,6 +864,7 @@ def _prepare_generation_from_merged(
 
     std_slug = std_slug_source.replace(" ", "_").lower()
     subject_slug = subject_slug_source.replace(" ", "_").lower()
+    selected_model = _resolve_model_selection(request.model or response_payload.get("model"), settings)
 
     metadata: Dict[str, Any] = {
         "source": "merged_topics",
@@ -850,6 +878,7 @@ def _prepare_generation_from_merged(
         "subject": resolved_subject,
         "board": resolved_board,
         "sem": resolved_sem,
+        "model": selected_model,
     }
 
     if primary_material:
@@ -893,6 +922,7 @@ def _prepare_generation_from_merged(
         "subject_slug": subject_slug,
         "log_context": log_context,
         "material_snapshot": material_snapshot,
+        "model": selected_model,
     }
 
 
@@ -2154,7 +2184,8 @@ async def post_lecture_generation_config(
 
     requested_language = _normalize_requested_language(payload.language) or payload.language
     requested_duration = _normalize_requested_duration(payload.duration) if payload.duration is not None else payload.duration
-    requested_model = (payload.model or None)
+    incoming_model = _normalize_requested_model(payload.model)
+    requested_model = incoming_model
     
     if payload.merged_id:
         merged_payload = _load_merged_lecture_payload(payload.merged_id)
@@ -2182,6 +2213,17 @@ async def post_lecture_generation_config(
                 save_required = True
             elif requested_duration is None:
                 requested_duration = data_section.get("duration")
+
+            normalized_existing_model = _normalize_requested_model(data_section.get("model"))
+
+
+
+            if incoming_model:
+                data_section["model"] = incoming_model
+                requested_model = incoming_model
+                save_required = True
+            elif requested_model is None:
+                requested_model = normalized_existing_model
 
             if save_required:
                 try:
@@ -2422,6 +2464,7 @@ async def generate_lecture_from_topics(
         style=style,
         title=context_payload["title"],
         metadata=context_payload["metadata"],
+        model=context_payload.get("model"),
     )
 # Record lecture credit usage for this admin (1 credit per generated lecture)
     try:
@@ -2533,8 +2576,6 @@ async def chat_about_lecture(
         payload = {"answer": answer}
 
     return {"status": True, "message": "Response generated", "data": payload}
-
-
 # -------------------------
 # -------------------------
 

@@ -23,6 +23,7 @@ class LectureGenerationRequest(BaseModel):
     style: Optional[str] = Field(default="storytelling")
     language: Optional[str] = Field(default=None)
     duration: Optional[int] = Field(default=None, ge=5, le=180)
+    model: Optional[str] = Field(default=None)
 
     @validator("selected_topic_ids")
     def ensure_topic_ids_present(cls, value: Optional[List[str]]) -> Optional[List[str]]:
@@ -52,14 +53,6 @@ class LectureGenerationRequest(BaseModel):
 
     class Config:
         allow_population_by_field_name = True
-
-
-class LectureChatRequest(BaseModel):
-    question: str
-    answer_type: Optional[str] = Field(default=None)
-    is_edit_command: bool = Field(default=False)
-    context_override: Optional[str] = Field(default=None)
-
 
 class LectureLookupRequest(BaseModel):
     std: str = Field(..., description="Class/standard identifier")

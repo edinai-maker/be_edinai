@@ -43,6 +43,7 @@ class GoogleTTSService:
         language: str,
         filename: str,
         subfolder: str | None = None,
+        model: str | None = None,
     ) -> Optional[Path]:
         """Generate an MP3 file for the provided text chunk."""
         normalized_text = (text or "").strip()
@@ -55,33 +56,29 @@ class GoogleTTSService:
             return None
 
         target_path = self._build_audio_path(lecture_id, filename, subfolder=subfolder)
-        voice = self._voice_for_language(language)
+        voice_params = self._voice_for_voice_model(language, model)
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             self._write_audio_file,
             normalized_text,
-            voice,
+            voice_params,
             target_path,
         )
 
     def _write_audio_file(
         self,
         text: str,
-        voice: Tuple[str, str],
+        voice: texttospeech.VoiceSelectionParams,
         target_path: Path,
     ) -> Optional[Path]:
-        language_code, voice_name = voice
         try:
             with open(target_path, "wb") as audio_file:
                 for chunk_text in self._chunk_text(text):
                     response = self._client.synthesize_speech(
                         input=texttospeech.SynthesisInput(text=chunk_text),
-                        voice=texttospeech.VoiceSelectionParams(
-                            language_code=language_code,
-                            name=voice_name,
-                        ),
+                        voice=voice,
                         audio_config=texttospeech.AudioConfig(
                             audio_encoding=texttospeech.AudioEncoding.MP3
                         ),
@@ -133,13 +130,56 @@ class GoogleTTSService:
         return lecture_dir / filename
 
     @staticmethod
-    def _voice_for_language(language: str) -> Tuple[str, str]:
-        mapping = {
-            "English": ("en-in", "en-IN-Chirp3-HD-Achernar"),
-            "Hindi": ("hi-in", "hi-IN-Chirp3-HD-Achernar"),
-            "Gujarati": ("gu-in", "gu-IN-Chirp3-HD-Achernar"),
+    def _voice_for_voice_model(language: str, model: str | None) -> texttospeech.VoiceSelectionParams:
+
+        language = (language or "English").strip()
+        normalized_model = (model or "").strip().lower()
+
+        default_voice = {
+            "English": ("en-in", "en-IN-Chirp3-HD-Achernar", texttospeech.SsmlVoiceGender.NEUTRAL),
+            "Hindi": ("hi-in", "hi-IN-Chirp3-HD-Achernar", texttospeech.SsmlVoiceGender.NEUTRAL),
+            "Gujarati": ("gu-in", "gu-IN-Chirp3-HD-Achernar", texttospeech.SsmlVoiceGender.NEUTRAL),
         }
-        return mapping.get(language, ("en-in", "en-IN-Chirp3-HD-Achernar"))
+        if normalized_model == "inai":
+            language_code, voice_name, gender = default_voice.get(language, default_voice["English"])
+            return texttospeech.VoiceSelectionParams(
+                language_code=language_code,
+                name=voice_name,
+                ssml_gender=gender,
+            )
+
+        if normalized_model == "vinai":
+            vinai_voice = {
+                "English": ("en-in", "en-IN-Wavenet-B", texttospeech.SsmlVoiceGender.MALE),
+                "Hindi": ("hi-in", "hi-IN-Wavenet-B", texttospeech.SsmlVoiceGender.MALE),
+                "Gujarati": ("gu-in", "gu-IN-Wavenet-D", texttospeech.SsmlVoiceGender.MALE),
+            }
+            language_code, voice_name, gender = vinai_voice.get(language, vinai_voice["English"])
+            return texttospeech.VoiceSelectionParams(
+                language_code=language_code,
+                name=voice_name,
+                ssml_gender=gender,
+            )
+
+        if normalized_model == "aira":
+            aira_voice = {
+                "English": ("en-in", "en-IN-Wavenet-A", texttospeech.SsmlVoiceGender.FEMALE),
+                "Hindi": ("hi-in", "hi-IN-Wavenet-A", texttospeech.SsmlVoiceGender.FEMALE),
+                "Gujarati": ("gu-in", "gu-IN-Wavenet-A", texttospeech.SsmlVoiceGender.FEMALE),
+            }
+            language_code, voice_name, gender = aira_voice.get(language, aira_voice["English"])
+            return texttospeech.VoiceSelectionParams(
+                language_code=language_code,
+                name=voice_name,
+                ssml_gender=gender,
+            )
+
+        language_code, voice_name, gender = default_voice.get(language, default_voice["English"])
+        return texttospeech.VoiceSelectionParams(
+            language_code=language_code,
+            name=voice_name,
+            ssml_gender=gender,
+        )
 
     def _chunk_text(self, text: str) -> Iterator[str]:
         normalized = text.strip()

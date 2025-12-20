@@ -68,10 +68,15 @@ class LectureService:
         style: str,
         title: str,
         metadata: Optional[Dict[str, Any]] = None,
+        model: Optional[str] = None,
         
     ) -> Dict[str, Any]:
         if not self._generator.configured:
             raise RuntimeError("Groq service is not configured")
+
+        metadata_payload: Dict[str, Any] = dict(metadata or {})
+        if model:
+            metadata_payload["model"] = model
 
         lecture_payload = await self._generator.generate_lecture_content(
             text=text,
@@ -96,7 +101,7 @@ class LectureService:
             slides=slides,
             context=context,
             text=text,
-            metadata=metadata,
+            metadata=metadata_payload,
             fallback_used=lecture_payload.get("fallback_used", False),
         )
 
@@ -161,6 +166,7 @@ class LectureService:
             return self._sanitize_audio_metadata(record)
 
         language = record.get("language", "English")
+        voice_model = (record.get("metadata") or {}).get("model")
         updated = False
         metadata_changed = False
 
@@ -195,6 +201,7 @@ class LectureService:
                 language=language,
                 filename=filename,
                 subfolder="audio",
+                model=voice_model,
             )
 
             if not audio_path:
