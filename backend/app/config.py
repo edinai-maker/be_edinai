@@ -113,6 +113,56 @@ class Settings(BaseSettings):
         env="GROQ_API_KEY",
         description="API key for Groq AI service",
     )
+    runway_api_key: Optional[str] = Field(
+        None,
+        env="RUNWAY_API_KEY",
+        description="API key for Runway text-to-video service",
+    )
+    runway_text_to_video_url: str = Field(
+        "https://api.runwayml.com/v1/text_to_video",
+        env="RUNWAY_TEXT_TO_VIDEO_URL",
+        description="Endpoint for Runway text-to-video generations",
+    )
+    runway_tasks_base_url: str = Field(
+        "https://api.runwayml.com/v1/tasks",
+        env="RUNWAY_TASKS_BASE_URL",
+        description="Base endpoint for Runway task polling",
+    )
+    runway_api_version: str = Field(
+        "2024-11-06",
+        env="RUNWAY_API_VERSION",
+        description="X-Runway-Version header value",
+    )
+    runway_text_to_video_model: str = Field(
+        "veo3",
+        env="RUNWAY_TEXT_TO_VIDEO_MODEL",
+        description="Default Runway text-to-video model identifier",
+    )
+    runway_text_to_video_ratio: str = Field(
+        "854:480",
+        env="RUNWAY_TEXT_TO_VIDEO_RATIO",
+        description="Default Runway video aspect ratio",
+    )
+    runway_text_to_video_duration: int = Field(
+        60,
+        env="RUNWAY_TEXT_TO_VIDEO_DURATION",
+        description="Default Runway video duration in seconds",
+    )
+    runway_text_to_image_url: str = Field(
+        "https://api.runwayml.com/v1/text_to_image",
+        env="RUNWAY_TEXT_TO_IMAGE_URL",
+        description="Endpoint for Runway text/image-to-image generations",
+    )
+    runway_text_to_image_model: str = Field(
+        "gen4_image",
+        env="RUNWAY_TEXT_TO_IMAGE_MODEL",
+        description="Default Runway text-to-image model identifier",
+    )
+    runway_text_to_image_ratio: str = Field(
+        "1360:768",
+        env="RUNWAY_TEXT_TO_IMAGE_RATIO",
+        description="Default Runway image aspect ratio",
+    )
 
     topic_extract_max_workers: int = Field(1, env="TOPIC_EXTRACT_MAX_WORKERS")
     topic_extract_queue_limit: int = Field(0, env="TOPIC_EXTRACT_QUEUE_LIMIT")

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import logging
 import shutil
+import mimetypes
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
-
+import httpx
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -16,7 +17,8 @@ from app.repository.lecture_repository import LectureRepository
 from app.services.lecture_generation_service import GroqService
 from app.services.tts_service import GoogleTTSService
 from app.utils.s3_file_handler import get_s3_service
-
+from app.services.runway_video_service import RunwayVideoService
+from app.services.runway_image_service import RunwayImageService
 logger = logging.getLogger(__name__)
 
 
@@ -28,6 +30,7 @@ class LectureService:
         *,
         db: Session,
         groq_api_key: Optional[str] = None,
+        runway_service: Optional[RunwayVideoService] = None,
     ) -> None:
         settings = get_settings()
 
@@ -46,6 +49,8 @@ class LectureService:
             storage_root=storage_root,
             credentials_path=getattr(settings, "gcp_tts_credentials_path", None),
         )
+        self._runway_service = runway_service or RunwayVideoService(settings=settings)
+        self._runway_image_service = RunwayImageService(settings=settings)
         self._s3_service = get_s3_service(settings)
         self._public_base_url = (
             settings.public_base_url.rstrip("/") if getattr(settings, "public_base_url", None) else None
@@ -89,6 +94,16 @@ class LectureService:
         slides: List[Dict[str, Any]] = lecture_payload.get("slides", [])  # type: ignore[assignment]
         if not slides:
             raise RuntimeError("Lecture generation produced no slides")
+        await self._maybe_attach_runway_media(
+
+            slides=slides,
+
+            lecture_title=title,
+
+            language=language,
+
+        )
+
 
         context = "\n\n".join(
             filter(None, (slide.get("narration", "") for slide in slides))
@@ -233,6 +248,25 @@ class LectureService:
 
             slide["audio_url"] = audio_url
             slide["audio_download_url"] = audio_download_url
+            if existing_file.is_file():
+
+                logger.info("Slide audio ready (existing): %s", slide["audio_url"])
+                continue
+
+            audio_path = await self._tts_service.synthesize_text(
+                lecture_id=lecture_id,
+                text=tts_text,
+                language=language,
+                filename=filename,
+                subfolder="audio",
+                model=voice_model,
+            )
+
+            if not audio_path:
+                logger.error("Failed to generate audio for slide %d", slide.get('number', index))
+                continue
+            logger.info("Slide audio generated: %s", slide["audio_url"])
+            updated = True
 
         if not (updated or metadata_changed):
             return self._sanitize_audio_metadata(record)
@@ -427,3 +461,252 @@ class LectureService:
             if len(items) == 2:
                 return f"{items[0]} and {items[1]}"
             return f"{', '.join(items[:-1])}, and {items[-1]}"
+    async def generate_runway_video_for_slide(
+
+        self,
+        *,
+        lecture_record: Optional[Dict[str, Any]] = None,
+        lecture_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Ensure slide 5 has a Runway video and persist the updated slides."""
+        if lecture_record is None:
+            if not lecture_id:
+                raise ValueError("lecture_id is required to regenerate the video")
+            lecture_record = await self._repository.get_lecture(lecture_id)
+        target_lecture_id = lecture_record.get("lecture_id") or lecture_id
+        slides = lecture_record.get("slides") or []
+        if len(slides) < 5:
+            raise ValueError("Lecture does not contain a fifth slide")
+
+        await self._maybe_attach_runway_video(
+            slides=slides,
+            lecture_title=lecture_record.get("title") or "",
+            language=lecture_record.get("language") or "English",
+        )
+
+        slide = slides[4]
+        if not slide.get("video_url"):
+            raise RuntimeError("Runway video generation failed")
+
+        if target_lecture_id:
+            await self._repository.update_lecture(target_lecture_id, {"slides": slides})
+        return slide
+
+    async def _maybe_attach_runway_media(
+        self,
+        *,
+        slides: List[Dict[str, Any]],
+        lecture_title: str,
+        language: str,
+    ) -> None:
+        """Generate requested Runway assets (images/videos) for configured slide numbers."""
+        if not slides:
+            return
+
+        await self._maybe_attach_runway_image(
+            slides=slides,
+            lecture_title=lecture_title,
+            language=language,
+            slide_numbers=(2, 3, 7),
+        )
+        await self._maybe_attach_runway_video(
+            slides=slides,
+            lecture_title=lecture_title,
+            language=language,
+            slide_numbers=(4, 5, 6),
+        )
+
+    async def _maybe_attach_runway_image(
+        self,
+        *,
+        slides: List[Dict[str, Any]],
+        lecture_title: str,
+        language: str,
+        slide_numbers: Sequence[int],
+    ) -> None:
+        """Generate Runway images for the specified slides and upload them to S3."""
+        if (
+            not self._runway_image_service
+            or not self._runway_image_service.configured
+            or not slide_numbers
+        ):
+            return
+
+        for slide_number in slide_numbers:
+            index = slide_number - 1
+            if index < 0 or index >= len(slides):
+                continue
+            slide = slides[index]
+            if slide.get("image_url"):
+                continue
+
+            prompt = self._build_runway_image_prompt(slide, lecture_title, language)
+            if not prompt:
+                continue
+
+            try:
+                result = await self._runway_image_service.create_text_to_image(
+                    prompt_text=prompt,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Runway image generation failed for slide %s: %s",
+                    slide_number,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            runway_url = result.get("image_url")
+            stored_url = await self._store_runway_asset_in_s3(
+                runway_url,
+                asset_type="image",
+                slide_number=slide_number,
+            )
+            if not stored_url:
+                continue
+
+            metadata = {
+                "task_id": result.get("task_id"),
+                "image_url": stored_url,
+                "source_url": runway_url,
+                "script": prompt,
+                "generated_at": datetime.utcnow().isoformat(),
+                "model": getattr(self._runway_image_service, "_default_model", "runway"),
+                "slide_number": slide_number,
+            }
+            slide["image_url"] = stored_url
+            slide["runway_image"] = metadata
+            logger.info(
+                "Runway image stored for slide %s (task: %s)",
+                slide_number,
+                metadata["task_id"],
+
+            )
+
+    async def _maybe_attach_runway_video(
+        self,
+        *,
+        slides: List[Dict[str, Any]],
+        lecture_title: str,
+        language: str,
+        slide_numbers: Sequence[int],
+    ) -> None:
+        """Generate Runway videos for the specified slides."""
+        if (
+            not self._runway_service
+            or not self._runway_service.configured
+            or not slide_numbers
+        ):
+            return
+
+        for slide_number in slide_numbers:
+            index = slide_number - 1
+            if index < 0 or index >= len(slides):
+                continue
+            slide = slides[index]
+            if slide.get("video_url"):
+                continue
+
+            script = self._build_runway_script(slide, lecture_title, language)
+            if not script:
+                continue
+
+            try:
+                result = await self._runway_service.create_text_to_video(
+                    prompt_text=script,
+                    duration_seconds=60,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Runway video generation failed for slide %s: %s",
+                    slide_number,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+            metadata = {
+                "task_id": result.get("task_id"),
+                "video_url": result.get("video_url"),
+                "duration_seconds": 60,
+                "script": script,
+                "generated_at": datetime.utcnow().isoformat(),
+                "model": getattr(self._runway_service, "_default_model", "runway"),
+                "slide_number": slide_number,
+            }
+            slide["video_url"] = result.get("video_url")
+            slide["runway_video"] = metadata
+            logger.info(
+                "Runway video generated for slide %s (lecture: %s, task: %s)",
+                slide_number,
+                lecture_title,
+                metadata["task_id"],
+            )
+
+    def _build_runway_image_prompt(self, slide: Dict[str, Any], lecture_title: str, language: str) -> str:
+        """Create a descriptive visual prompt from slide content."""
+        segments: List[str] = []
+        title = (slide.get("title") or "").strip()
+        narration = (slide.get("narration") or "").strip()
+        bullets = [
+            (bullet or "").strip()
+            for bullet in slide.get("bullets") or []
+            if (bullet or "").strip()
+        ]
+        question = (slide.get("question") or "").strip()
+
+        if lecture_title:
+            segments.append(f"Lecture topic: {lecture_title.strip()}.")
+        if title:
+            segments.append(f"Focus: {title}.")
+        if narration:
+            segments.append(narration)
+        if bullets:
+            segments.append("Key ideas: " + "; ".join(bullets[:4]))
+        if question:
+            segments.append(f"Reflection prompt: {question}")
+
+        prompt = " ".join(segments).strip()
+        if not prompt:
+            return ""
+
+        if len(prompt) > 980:
+            prompt = prompt[:980].rsplit(" ", 1)[0] + "..."
+
+        prompt += " Generate a single detailed educational illustration with clear visuals."
+        return prompt.strip()
+
+    def _build_runway_script(self, slide: Dict[str, Any], lecture_title: str, language: str) -> str:
+        """Compose a concise script for Runway prompt based on slide 5 content."""
+        segments: List[str] = []
+        title = (slide.get("title") or "").strip()
+        narration = (slide.get("narration") or "").strip()
+        bullets = [
+            (bullet or "").strip()
+            for bullet in slide.get("bullets") or []
+            if (bullet or "").strip()
+        ]
+        question = (slide.get("question") or "").strip()
+
+        if lecture_title:
+            segments.append(f"Lecture title: {lecture_title.strip()}.")
+        if title:
+            segments.append(f"Slide focus: {title}.")
+        if narration:
+            segments.append(narration)
+        if bullets:
+            segments.append("Key points: " + "; ".join(bullets[:4]))
+        if question:
+            segments.append(f"Prompt for thought: {question}")
+
+        script = " ".join(segments).strip()
+        if not script:
+            return ""
+
+        # Ensure script length within Runway limits.
+        if len(script) > 980:
+            script = script[:980].rsplit(" ", 1)[0] + "..."
+
+        script += " Generate a cinematic 1 minute educational video with smooth transitions and no on-screen text or subtitles."
+        return script.strip()
