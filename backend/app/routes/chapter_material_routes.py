@@ -1970,7 +1970,10 @@ async def assistant_suggest_topics(
         f"Return ONLY valid JSON with this structure: "
         '{"suggestions": [{"title": "...", "summary": "...", "supporting_quote": "..."}]}'
         f"\nMaximum {MAX_ASSISTANT_SUGGESTIONS} suggestions. "
-        f"{limit_text}"
+        f"{limit_text} "
+        "Only respond when the user query clearly references the provided chapter topics or PDF content. "
+        'If the query is unrelated, respond with EXACTLY this JSON (no additional keys or text): '
+        '{"suggestions": [], "message": "I am currently answering questions related to this chapter only. Please ask a question based on the ongoing lecture topic."}'
     )
 
     api_key = os.getenv("GROQ_API_KEY")
@@ -2003,38 +2006,64 @@ async def assistant_suggest_topics(
     raw_reply = (completion.choices[0].message.content or "").strip()
     suggestions = []
     reply_text = raw_reply
+    rejection_notice: Optional[str] = None
 
     try:
         parsed = json.loads(raw_reply)
         if isinstance(parsed, dict):
             parsed_suggestions = parsed.get("suggestions", [])
-            for idx, item in enumerate(parsed_suggestions, start=1):
-                if not isinstance(item, dict):
-                    continue
-                title = str(item.get("title", "")).strip()
-                summary = str(item.get("summary", "")).strip()
-                quote = str(item.get("supporting_quote", "")).strip()
-                if title and quote:
-                    suggestions.append({
-                        "suggestion_id": str(item.get("suggestion_id") or item.get("id") or idx),
-                        "title": title,
-                        "summary": summary,
-                        "supporting_quote": quote[:240],
-                    })
-            if len(suggestions) > MAX_ASSISTANT_SUGGESTIONS:
-                suggestions = suggestions[:MAX_ASSISTANT_SUGGESTIONS]
-            if suggestions:
-                reply_lines = ["Here are topic suggestions based on your PDF:"]
-                for idx, suggestion in enumerate(suggestions, start=1):
-                    summary_part = f" — {suggestion['summary']}" if suggestion['summary'] else ""
-                    reply_lines.append(f"{idx}. {suggestion['title']}{summary_part}")
-                reply_text = "\n".join(reply_lines)
+            rejection_message = str(parsed.get("message", "")).strip() if parsed.get("message") is not None else ""
+
+            if (not parsed_suggestions or not isinstance(parsed_suggestions, list)) and rejection_message:
+                rejection_notice = rejection_message or "I am currently answering questions related to this chapter only. Please ask a question based on the ongoing lecture topic."
+                suggestions = []
+                reply_text = rejection_notice
             else:
-                reply_text = "No additional grounded subtopics were found in the supplied PDF excerpt."
+                for idx, item in enumerate(parsed_suggestions, start=1):
+                    if not isinstance(item, dict):
+                        continue
+                    title = str(item.get("title", "")).strip()
+                    summary = str(item.get("summary", "")).strip()
+                    quote = str(item.get("supporting_quote", "")).strip()
+                    if title and quote:
+                        suggestions.append({
+                            "suggestion_id": str(item.get("suggestion_id") or item.get("id") or idx),
+                            "title": title,
+                            "summary": summary,
+                            "supporting_quote": quote[:240],
+                        })
+                if len(suggestions) > MAX_ASSISTANT_SUGGESTIONS:
+                    suggestions = suggestions[:MAX_ASSISTANT_SUGGESTIONS]
+                if suggestions:
+                    reply_lines = ["Here are topic suggestions based on your PDF:"]
+                    for idx, suggestion in enumerate(suggestions, start=1):
+                        summary_part = f" — {suggestion['summary']}" if suggestion['summary'] else ""
+                        reply_lines.append(f"{idx}. {suggestion['title']}{summary_part}")
+                    reply_text = "\n".join(reply_lines)
+                else:
+                    reply_text = "No additional grounded subtopics were found in the supplied PDF excerpt."
+    
     except json.JSONDecodeError:
         logger.warning("Assistant did not return valid JSON")
         suggestions = []
         reply_text = "I couldn't generate structured suggestions. Please try rephrasing your query."
+
+    if rejection_notice:
+        return {
+            "status": False,
+            "message": rejection_notice,
+            "data": {
+                "suggestions": [],
+                "reply": rejection_notice,
+                "plan_label": plan_label,
+                "plan_limit": plan_limit,
+                "max_suggestions": MAX_ASSISTANT_SUGGESTIONS,
+                "language_code": material_language_code,
+                "language_label": language_label,
+                "existing_topics_count": len(existing_topics),
+                "reason": "UNRELATED_QUERY",
+            },
+        }
 
     if suggestions:
         persist_assistant_suggestions(admin_id, material.get("id") if isinstance(material, dict) else material.id, suggestions)
