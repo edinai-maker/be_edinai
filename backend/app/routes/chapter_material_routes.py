@@ -2494,6 +2494,7 @@ async def generate_lecture_from_topics(
         title=context_payload["title"],
         metadata=context_payload["metadata"],
         model=context_payload.get("model"),
+        reuse_existing=False,
     )
 # Record lecture credit usage for this admin (1 credit per generated lecture)
     try:

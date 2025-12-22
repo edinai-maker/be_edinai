@@ -70,7 +70,7 @@ class LectureService:
         title: str,
         metadata: Optional[Dict[str, Any]] = None,
         model: Optional[str] = None,
-        
+        reuse_existing: bool = False,
     ) -> Dict[str, Any]:
         if not self._generator.configured:
             raise RuntimeError("Groq service is not configured")
@@ -104,6 +104,7 @@ class LectureService:
             text=text,
             metadata=metadata_payload,
             fallback_used=lecture_payload.get("fallback_used", False),
+            reuse_existing=reuse_existing,
         )
 
         return await self._attach_slide_audio(record)

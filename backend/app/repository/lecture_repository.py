@@ -492,12 +492,13 @@ async def create_lecture(
     board: Optional[str] = None,
     lecture_uid: Optional[str] = None,
     lecture_url: Optional[str] = None,
+    reuse_existing: bool = False,
 ) -> Dict[str, Any]:
     metadata = _default_metadata(metadata)
     admin_value = admin_id or metadata.get("admin_id") 
     material_value = material_id or metadata.get("material_id")
     reuse_lecture_uid: Optional[str] = None
-    if not lecture_uid and material_value:
+    if reuse_existing and not lecture_uid and material_value:
         reuse_lecture_uid = _maybe_reuse_existing_lecture_id(
             admin_id=admin_value,
             material_id=material_value,
