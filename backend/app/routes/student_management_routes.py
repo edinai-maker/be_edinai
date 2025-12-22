@@ -250,14 +250,22 @@ async def upload_student_roster(
         admin_id,
         [entry["enrollment_number"] for entry in entries],
     )
-    if existing:
-        existing_set = set(existing)
+    other_admin_rows = roster_repo.fetch_other_admin_enrollments(
+        admin_id,
+        [entry["enrollment_number"] for entry in entries],
+    )
+    other_admin_map = {
+        row["enrollment_number"]: row["admin_id"] for row in other_admin_rows
+    }
+    if existing or other_admin_map:
+        existing_set = set(existing or [])
         filtered_entries: List[dict] = []
         for entry in entries:
-            if entry["enrollment_number"] in existing_set:
+            enrollment = entry["enrollment_number"]
+            if enrollment in existing_set:
                 _record_duplicate(
                     row_number=entry.get("row_number"),
-                    enrollment_number=entry["enrollment_number"],
+                    enrollment_number=enrollment,
                     first_name=entry["first_name"],
                     middle_name=entry.get("middle_name"),
                     last_name=entry.get("last_name"),
@@ -265,6 +273,19 @@ async def upload_student_roster(
                     division=entry.get("division"),
                     auto_password=entry.get("auto_password"),
                     reason="Enrollment already exists",
+                )
+                continue
+            if enrollment in other_admin_map:
+                _record_duplicate(
+                    row_number=entry.get("row_number"),
+                    enrollment_number=enrollment,
+                    first_name=entry["first_name"],
+                    middle_name=entry.get("middle_name"),
+                    last_name=entry.get("last_name"),
+                    std=entry["std"],
+                    division=entry.get("division"),
+                    auto_password=entry.get("auto_password"),
+                    reason="Enrollment already exists for another school",
                 )
                 continue
             filtered_entries.append(entry)

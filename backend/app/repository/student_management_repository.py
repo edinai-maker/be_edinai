@@ -38,6 +38,21 @@ def fetch_existing_enrollments(admin_id: int, enrollments: Iterable[str]) -> Lis
 
     return [row["enrollment_number"] for row in rows]
 
+def fetch_other_admin_enrollments(admin_id: int, enrollments: Iterable[str]) -> List[Dict[str, Any]]:
+    """Return enrollment rows that exist for other admins."""
+
+    enrollment_list = list(enrollments)
+    if not enrollment_list:
+        return []
+
+    query = (
+        "SELECT enrollment_number, admin_id FROM student_roster_entries "
+        "WHERE admin_id <> %(admin_id)s AND enrollment_number = ANY(%(enrollments)s)"
+    )
+
+    with get_pg_cursor() as cur:
+        cur.execute(query, {"admin_id": admin_id, "enrollments": enrollment_list})
+        return cur.fetchall()
 
 def insert_roster_entries(admin_id: int, entries: List[Dict[str, Any]]) -> None:
     """Insert roster entries for an admin."""
