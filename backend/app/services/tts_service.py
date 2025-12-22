@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Iterator, Optional, Tuple
 
@@ -73,8 +74,16 @@ class GoogleTTSService:
         voice: texttospeech.VoiceSelectionParams,
         target_path: Path,
     ) -> Optional[Path]:
+        temp_path: Optional[Path] = None
         try:
-            with open(target_path, "wb") as audio_file:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                delete=False,
+                dir=target_path.parent,
+                suffix=".tmp",
+            ) as temp_file:
+                temp_path = Path(temp_file.name)
                 for chunk_text in self._chunk_text(text):
                     response = self._client.synthesize_speech(
                         input=texttospeech.SynthesisInput(text=chunk_text),
@@ -83,7 +92,8 @@ class GoogleTTSService:
                             audio_encoding=texttospeech.AudioEncoding.MP3
                         ),
                     )
-                    audio_file.write(response.audio_content)
+                    temp_file.write(response.audio_content)
+            temp_path.replace(target_path)
             logger.info("Generated lecture audio at %s", target_path)
             return target_path
         except (GoogleAPICallError, OSError, ValueError) as exc:
@@ -93,11 +103,12 @@ class GoogleTTSService:
                 exc,
             )
             logger.exception("Full TTS error details for %s:", target_path.name)
-            try:
-                if target_path.exists():
-                    target_path.unlink(missing_ok=True)
-            except Exception:  # pragma: no cover - best effort cleanup
-                pass
+            for path in filter(None, [temp_path, target_path]):
+                try:
+                    if path.exists():
+                        path.unlink(missing_ok=True)
+                except Exception:  # pragma: no cover - best effort cleanup
+                    pass
             return None
 
     def _build_client(self, credentials_path: str) -> texttospeech.TextToSpeechClient:
