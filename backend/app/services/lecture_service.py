@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import logging
 import shutil
-import mimetypes
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
-import re
 import httpx
 from sqlalchemy.orm import Session
 
@@ -96,10 +94,13 @@ class LectureService:
         if not slides:
             raise RuntimeError("Lecture generation produced no slides")
         await self._maybe_attach_runway_media(
+
             slides=slides,
+
             lecture_title=title,
+
             language=language,
-            media_triggers = self._collect_media_triggers(slides)
+
         )
 
 
@@ -118,7 +119,6 @@ class LectureService:
             metadata=metadata_payload,
             fallback_used=lecture_payload.get("fallback_used", False),
             reuse_existing=reuse_existing,
-            media_triggers=media_triggers,
         )
 
         return await self._attach_slide_audio(record)
@@ -506,7 +506,7 @@ class LectureService:
             slides=slides,
             lecture_title=lecture_title,
             language=language,
-            slide_numbers=(2, 3, 7),
+            slide_numbers=(1,2, 3, 7,8,9),
         )
         await self._maybe_attach_runway_video(
             slides=slides,
@@ -523,7 +523,7 @@ class LectureService:
         language: str,
         slide_numbers: Sequence[int],
     ) -> None:
-        """Generate Runway images for the specified slides and upload them to S3."""
+        """Generate Runway images for the specified slides and persist URLs in slide metadata."""
         if (
             not self._runway_image_service
             or not self._runway_image_service.configured
@@ -557,31 +557,24 @@ class LectureService:
                 continue
 
             runway_url = result.get("image_url")
-            stored_url = await self._store_runway_asset_in_s3(
-                runway_url,
-                asset_type="image",
-                slide_number=slide_number,
-            )
-            if not stored_url:
+            if not runway_url:
+                logger.warning("Runway image generation returned no URL for slide %s", slide_number)
                 continue
 
             metadata = {
                 "task_id": result.get("task_id"),
-                "image_url": stored_url,
-                "source_url": runway_url,
+                "image_url": runway_url,
                 "script": prompt,
                 "generated_at": datetime.utcnow().isoformat(),
                 "model": getattr(self._runway_image_service, "_default_model", "runway"),
                 "slide_number": slide_number,
             }
-            slide["image_url"] = stored_url
+            slide["image_url"] = runway_url
             slide["runway_image"] = metadata
-            slide["image_trigger_points"] = self._build_trigger_points(prompt, kind="image_prompt")
             logger.info(
-                "Runway image stored for slide %s (task: %s)",
+                "Runway image generated for slide %s (task: %s)",
                 slide_number,
                 metadata["task_id"],
-
             )
 
     async def _maybe_attach_runway_video(
@@ -600,126 +593,49 @@ class LectureService:
         ):
             return
 
-        variant_specs = (
-            (
-                "cinematic",
-                "Emphasize cinematic camera moves with sweeping transitions and classroom depth while keeping the scene completely free of people or characters.",
-            ),
-            (
-                "closeup",
-                "Highlight close-up shots of key concepts with smooth motion graphics overlays, focusing only on objects and diagrams without any characters.",
-            ),
-            (
-                "chalkboard",
-                "Use chalkboard-style animations with step-by-step illustrations and guiding arrows, ensuring the visuals contain no human figures.",
-            ),
-        )
-
         for slide_number in slide_numbers:
             index = slide_number - 1
             if index < 0 or index >= len(slides):
                 continue
             slide = slides[index]
-            base_script = self._build_runway_script(slide, lecture_title, language)
-            if not base_script:
+            if slide.get("video_url"):
                 continue
 
-            existing_variants = slide.get("video_variants")
-            variant_map: Dict[str, Dict[str, Any]] = {}
-            if isinstance(existing_variants, list):
-                for entry in existing_variants:
-                    if isinstance(entry, dict) and entry.get("variant"):
-                        variant_map[entry["variant"]] = entry
+            script = self._build_runway_script(slide, lecture_title, language)
+            if not script:
+                continue
 
-            generated_any = False
-            for variant_key, variant_hint in variant_specs:
-                cached_variant = variant_map.get(variant_key)
-                if cached_variant and cached_variant.get("video_url"):
-                    continue
-
-                instruction_suffix = (
-                    "Generate a cinematic 1 minute educational video with smooth transitions, no on-screen text or subtitles, and absolutely no people, characters, or human figures in view."
+            try:
+                result = await self._runway_service.create_text_to_video(
+                    prompt_text=script,
+                    duration_seconds=60,
                 )
-                variant_prompt = f"{base_script} {variant_hint} {instruction_suffix}".strip()
-                if len(variant_prompt) > 980:
-                    variant_prompt = variant_prompt[:980].rsplit(" ", 1)[0] + "..."
-
-                try:
-                    result = await self._runway_service.create_text_to_video(
-                        prompt_text=variant_prompt,
-                        duration_seconds=60,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Runway video generation failed for slide %s variant %s: %s",
-                        slide_number,
-                        variant_key,
-                        exc,
-                        exc_info=True,
-                    )
-                    continue
-
-                metadata = {
-                    "task_id": result.get("task_id"),
-                    "video_url": result.get("video_url"),
-                    "duration_seconds": 60,
-                    "script": base_script,
-                    "generated_at": datetime.utcnow().isoformat(),
-                    "model": getattr(self._runway_service, "_default_model", "runway"),
-                    "slide_number": slide_number,
-                    "variant": variant_key,
-                }
-                trigger_points = result.get("trigger_points") or self._build_trigger_points(
-                    base_script,
-                    duration=metadata["duration_seconds"],
-                    kind="video_segment",
-                )
-
-                variant_map[variant_key] = {
-                    "variant": variant_key,
-                    "video_url": result.get("video_url"),
-                    "trigger_points": trigger_points,
-                    "metadata": metadata,
-                }
-                generated_any = True
-                logger.info(
-                    "Runway video generated for slide %s (variant: %s, lecture: %s, task: %s)",
+            except Exception as exc:
+                logger.warning(
+                    "Runway video generation failed for slide %s: %s",
                     slide_number,
-                    variant_key,
-                    lecture_title,
-                    metadata["task_id"],
+                    exc,
+                    exc_info=True,
                 )
-
-            if not variant_map:
                 continue
-            ordered_variants: List[Dict[str, Any]] = []
-            for variant_key, _ in variant_specs:
-                entry = variant_map.get(variant_key)
-                if entry:
-                    ordered_variants.append(entry)
-            for key, entry in variant_map.items():
-                if key not in {spec[0] for spec in variant_specs}:
-                    ordered_variants.append(entry)
 
-            slide["video_variants"] = ordered_variants
-            slide["runway_videos"] = [v.get("metadata") for v in ordered_variants if v.get("metadata")]
-
-            primary = ordered_variants[0]
-            slide["video_url"] = primary.get("video_url")
-            slide["runway_video"] = primary.get("metadata")
-            slide["video_trigger_points"] = primary.get("trigger_points")
-            slide["video_trigger_sets"] = [
-                {
-                    "variant": variant.get("variant"),
-                    "video_url": variant.get("video_url"),
-                    "trigger_points": variant.get("trigger_points", []),
-                }
-                for variant in ordered_variants
-                if variant.get("trigger_points")
-            ]
-
-            if generated_any:
-                slide.pop("video_error", None)
+            metadata = {
+                "task_id": result.get("task_id"),
+                "video_url": result.get("video_url"),
+                "duration_seconds": 60,
+                "script": script,
+                "generated_at": datetime.utcnow().isoformat(),
+                "model": getattr(self._runway_service, "_default_model", "runway"),
+                "slide_number": slide_number,
+            }
+            slide["video_url"] = result.get("video_url")
+            slide["runway_video"] = metadata
+            logger.info(
+                "Runway video generated for slide %s (lecture: %s, task: %s)",
+                slide_number,
+                lecture_title,
+                metadata["task_id"],
+            )
 
     def _build_runway_image_prompt(self, slide: Dict[str, Any], lecture_title: str, language: str) -> str:
         """Create a descriptive visual prompt from slide content."""
@@ -787,105 +703,3 @@ class LectureService:
 
         script += " Generate a cinematic 1 minute educational video with smooth transitions and no on-screen text or subtitles."
         return script.strip()
-
-    def _collect_media_triggers(self, slides: List[Dict[str, Any]]) -> Dict[str, Any]:
-        triggers: Dict[str, Any] = {
-            "videos": [],
-            "images": [],
-        }
-
-        for slide in slides:
-            if not isinstance(slide, dict):
-                continue
-
-            number = slide.get("number")
-
-            video_variants = slide.get("video_variants")
-            if isinstance(video_variants, list) and video_variants:
-                for variant in video_variants:
-                    trigger_points = (variant or {}).get("trigger_points")
-                    if not trigger_points:
-                        continue
-                    triggers["videos"].append(
-                        {
-                            "slide_number": number,
-                            "variant": variant.get("variant"),
-                            "trigger_points": trigger_points,
-                            "video_url": variant.get("video_url"),
-                        }
-                    )
-            else:
-                video_points = slide.get("video_trigger_points")
-                if video_points:
-                    triggers["videos"].append(
-                        {
-                            "slide_number": number,
-                            "variant": "default",
-                            "trigger_points": video_points,
-                            "video_url": slide.get("video_url"),
-                        }
-                    )
-
-            image_points = slide.get("image_trigger_points")
-            if image_points:
-                triggers["images"].append(
-                    {
-                        "slide_number": number,
-                        "trigger_points": image_points,
-                        "image_url": slide.get("image_url"),
-                    }
-                )
-
-        if not triggers["videos"] and not triggers["images"]:
-            return {}
-
-        return triggers
-
-    def _build_trigger_points(
-        self,
-        text: str,
-        *,
-        duration: Optional[int] = None,
-        kind: str = "narration_segment",
-    ) -> List[Dict[str, Any]]:
-        normalized = (text or "").strip()
-        if not normalized:
-            return []
-
-        sentences = [
-            sentence.strip()
-            for sentence in re.split(r"(?<=[.!?])\s+", normalized)
-            if sentence.strip()
-        ]
-        if not sentences:
-            sentences = [normalized]
-
-        trigger_points: List[Dict[str, Any]] = []
-        interval = None
-        if duration and duration > 0:
-            interval = duration / max(len(sentences), 1)
-
-        for index, sentence in enumerate(sentences, start=1):
-            offset = None
-            if interval is not None:
-                offset = round(min(duration, (index - 1) * interval), 2)
-            trigger_points.append(
-                {
-                    "id": f"segment_{index}",
-                    "offset_seconds": offset,
-                    "text": sentence,
-                    "type": kind,
-                }
-            )
-
-        if interval is not None:
-            trigger_points.append(
-                {
-                    "id": "segment_end",
-                    "offset_seconds": duration,
-                    "text": "Segment completed",
-                    "type": kind,
-                }
-            )
-
-        return trigger_points

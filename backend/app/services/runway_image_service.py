@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
+try:  # Optional SDK import; falls back to HTTP client if unavailable
+    from runwayml import RunwayML  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    RunwayML = None
+
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,7 @@ class RunwayImageService:
         self._default_model = self._settings.runway_text_to_image_model
         self._default_ratio = self._settings.runway_text_to_image_ratio
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
+        self._sdk_client = RunwayML(api_key=self._api_key) if (RunwayML and self._api_key) else None
 
     @property
     def configured(self) -> bool:
@@ -48,10 +54,86 @@ class RunwayImageService:
         if not self.configured:
             raise RuntimeError("Runway API is not configured")
 
+        resolved_model = model or self._default_model
+        resolved_ratio = ratio or self._default_ratio
+
+        if self._sdk_client:
+            task_id, status, output_urls, raw = await self._create_with_sdk(
+                prompt_text=prompt_text,
+                model=resolved_model,
+                ratio=resolved_ratio,
+                reference_images=reference_images,
+                seed=seed,
+            )
+        else:
+            task_id, status, output_urls, raw = await self._create_with_http(
+                prompt_text=prompt_text,
+                model=resolved_model,
+                ratio=resolved_ratio,
+                reference_images=reference_images,
+                seed=seed,
+                poll_interval_seconds=poll_interval_seconds,
+                max_wait_seconds=max_wait_seconds,
+            )
+
+        if status != "SUCCEEDED":
+            raise RuntimeError(f"Runway task {task_id} failed: {raw}")
+
+        if not output_urls:
+            raise RuntimeError(f"Runway task {task_id} succeeded without output URLs")
+
+        return {
+            "task_id": task_id,
+            "image_url": output_urls[0],
+            "output": output_urls,
+            "raw": raw,
+        }
+
+    async def _create_with_sdk(
+        self,
+        *,
+        prompt_text: str,
+        model: str,
+        ratio: str,
+        reference_images: Optional[Sequence[Dict[str, Any]]] = None,
+        seed: Optional[int] = None,
+    ) -> tuple[str, str, List[str], Dict[str, Any]]:
+        """Use the official Runway SDK (blocking) in a thread to create + wait for output."""
+        if not self._sdk_client:
+            raise RuntimeError("Runway SDK client is not initialized")
+
+        def _run() -> tuple[str, str, List[str], Dict[str, Any]]:
+            task = self._sdk_client.text_to_image.create(
+                model=model,
+                prompt_text=prompt_text[:1000],
+                ratio=ratio,
+                seed=seed,
+                reference_images=reference_images,
+            ).wait_for_task_output()
+            output_urls = getattr(task, "output", None) or []
+            task_id = getattr(task, "id", None) or getattr(task, "task_id", None) or ""
+            status = getattr(task, "status", None) or ""
+            raw = task.to_dict() if hasattr(task, "to_dict") else getattr(task, "__dict__", {}) or {}
+            return task_id, status, output_urls, raw
+
+        return await asyncio.to_thread(_run)
+
+    async def _create_with_http(
+        self,
+        *,
+        prompt_text: str,
+        model: str,
+        ratio: str,
+        reference_images: Optional[Sequence[Dict[str, Any]]] = None,
+        seed: Optional[int] = None,
+        poll_interval_seconds: float = 3.0,
+        max_wait_seconds: int = 120,
+    ) -> tuple[str, str, List[str], Dict[str, Any]]:
+        """Fallback HTTP client for Runway image generation."""
         payload: Dict[str, Any] = {
-            "model": model or self._default_model,
+            "model": model,
             "promptText": prompt_text[:1000],
-            "ratio": ratio or self._default_ratio,
+            "ratio": ratio,
         }
 
         if reference_images:
@@ -103,19 +185,8 @@ class RunwayImageService:
             last_payload = poll_resp.json()
             status = last_payload.get("status")
 
-        if status != "SUCCEEDED":
-            raise RuntimeError(f"Runway task {task_id} failed: {last_payload}")
-
         output_urls = last_payload.get("output") or []
-        if not output_urls:
-            raise RuntimeError(f"Runway task {task_id} succeeded without output URLs")
-
-        return {
-            "task_id": task_id,
-            "image_url": output_urls[0],
-            "output": output_urls,
-            "raw": last_payload,
-        }
+        return task_id, status or "", output_urls, last_payload
 
 
 runway_image_service = RunwayImageService()
