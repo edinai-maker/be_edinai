@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -110,12 +111,53 @@ class RunwayVideoService:
         if not output_urls:
             raise RuntimeError(f"Runway task {task_id} succeeded without output URLs")
 
+        trigger_points = self._compute_trigger_points(payload["promptText"], resolved_duration)
+
         return {
             "task_id": task_id,
             "video_url": output_urls[0],
             "output": output_urls,
             "raw": last_payload,
+            "trigger_points": trigger_points,
         }
+
+    def _compute_trigger_points(self, script: str, duration_seconds: int) -> List[Dict[str, Any]]:
+        """Derive simple trigger points from the generated script."""
+        normalized_script = (script or "").strip()
+        if not normalized_script or duration_seconds <= 0:
+            return []
+
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", normalized_script)
+            if sentence.strip()
+        ]
+        if not sentences:
+            sentences = [normalized_script]
+
+        interval = duration_seconds / max(len(sentences), 1)
+        trigger_points: List[Dict[str, Any]] = []
+        for index, sentence in enumerate(sentences, start=1):
+            offset = round(min(duration_seconds, (index - 1) * interval), 2)
+            trigger_points.append(
+                {
+                    "id": f"segment_{index}",
+                    "offset_seconds": offset,
+                    "text": sentence,
+                    "type": "narration_segment",
+                }
+            )
+
+        trigger_points.append(
+            {
+                "id": "video_end",
+                "offset_seconds": duration_seconds,
+                "text": "Segment completed",
+                "type": "narration_segment",
+            }
+        )
+
+        return trigger_points
 
 
 runway_video_service = RunwayVideoService()

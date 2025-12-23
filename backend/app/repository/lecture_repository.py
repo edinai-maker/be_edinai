@@ -493,6 +493,7 @@ async def create_lecture(
     lecture_uid: Optional[str] = None,
     lecture_url: Optional[str] = None,
     reuse_existing: bool = False,
+    media_triggers: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     metadata = _default_metadata(metadata)
     admin_value = admin_id or metadata.get("admin_id") 
@@ -524,6 +525,8 @@ async def create_lecture(
         "play_count": 0,
         "last_played_at": None,
     }
+    if media_triggers:
+        record["media_triggers"] = media_triggers
 
     record["lecture_url"] = lecture_url or _build_default_url(record)
     subject_value = subject or metadata.get("subject")
