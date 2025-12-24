@@ -559,13 +559,13 @@ class GroqService:
         await self._enforce_language_output(slides, language)
         estimated_duration = self._estimate_duration_minutes(
             slides,
-            requested_duration=estimated_duration,
+            requested_duration=duration,
             language=language,
         )
         
         return {
             "slides": slides,
-            "estimated_duration": duration,
+            "estimated_duration": estimated_duration,
             "fallback_used": fallback_used,
         }
     async def _retry_exact_slide_count(
