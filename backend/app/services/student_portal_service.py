@@ -785,7 +785,39 @@ def list_watched_videos(
         "videos": prepared_records,
     }
 
-
+def get_lecture_watch_ratio(
+    *,
+    current_context: Dict[str, Optional[str]],
+    std_override: Optional[str] = None,
+) -> Dict[str, Any]:
+    std_value = std_override or current_context.get("std")
+    totals = student_portal_video_repository.get_video_totals_for_std(
+        admin_id=current_context["admin_id"],
+        std=std_value,
+    )
+    summary = student_portal_video_repository.get_watch_summary(
+        admin_id=current_context["admin_id"],
+        std=std_value,
+        enrollment_number=current_context["enrollment_number"],
+    )
+    total_lectures = totals.get("total_videos", 0)
+    watched_lectures = summary.get("watched_videos", 0)
+    completion_fraction = 0.0
+    if total_lectures > 0:
+        completion_fraction = min(watched_lectures / total_lectures, 1.0)
+    total_duration_seconds = totals.get("total_duration_seconds", 0) or 0
+    watched_seconds = summary.get("total_watch_seconds", 0) or 0
+    completed_lectures = summary.get("completed_videos", 0) or 0
+    watched_progress_text = _format_progress_text(watched_seconds, total_duration_seconds)
+    return {
+        "summary": {
+            "total_lectures": total_lectures,
+            "completion": f"{watched_lectures}/{total_lectures}" if total_lectures else "0/0",
+            "completion_ratio": round(completion_fraction * 100, 2),
+            "watched_duration_text": watched_progress_text,
+        }
+    }
+    
 def list_watched_lecture_cards(
     *,
     current_context: Dict[str, Optional[str]],

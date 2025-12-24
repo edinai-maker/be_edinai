@@ -407,6 +407,18 @@ async def list_watched_lectures(current_enrollment: str = Depends(_get_current_s
     payload = student_portal_service.list_watched_videos(current_context=context)
     return ResponseBase(status=True, message="Watched lectures fetched successfully", data=payload)
 
+@router.get("/watched-lectures/ratio", response_model=ResponseBase)
+async def get_watched_lecture_ratio(
+    enrollment_number: str = Query(..., min_length=3, max_length=32),
+    std: Optional[str] = Query(None, min_length=1, max_length=32),
+) -> ResponseBase:
+    normalized = enrollment_number.strip()
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Enrollment number required")
+    context = student_portal_service.get_roster_context(normalized)
+    payload = student_portal_service.get_lecture_watch_ratio(current_context=context, std_override=std)
+    return ResponseBase(status=True, message="Lecture watch ratio fetched successfully", data=payload)
+
 @router.get("/watched-lectures/cards", response_model=ResponseBase)
 async def list_watched_lecture_cards(enrollment_number: str = Query(..., min_length=3, max_length=32)) -> ResponseBase:
     """Tokenless helper endpoint that returns watched-lecture summary for a given enrollment."""

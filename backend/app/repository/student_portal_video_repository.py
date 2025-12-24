@@ -606,7 +606,34 @@ def list_watched_videos(
         items.append(base)
     return items
 
+def get_video_totals_for_std(*, admin_id: int, std: Optional[str]) -> Dict[str, int]:
+    params: Dict[str, Any] = {"admin_id": admin_id}
+    std_clause = ""
+    if std:
+        normalized_std = std.strip()
+        if normalized_std:
+            params["std"] = normalized_std
+            params["std_regex"] = rf"(^|[,\s]){normalized_std}([,\s]|$)"
+            std_clause = " AND (std = %(std)s OR std ~ %(std_regex)s OR std IS NULL)"
+    query = f"""
+        SELECT
+            COUNT(*) AS total_videos,
+            COALESCE(SUM(duration_seconds), 0) AS total_duration_seconds
+        FROM student_portal_videos
+        WHERE admin_id = %(admin_id)s
+          {std_clause}
+    """
+    with get_pg_cursor() as cur:
+        cur.execute(query, params)
+        row = cur.fetchone() or {}
+    total_videos = int(row.get("total_videos") or 0)
+    total_duration_seconds = int(row.get("total_duration_seconds") or 0)
+    return {
+        "total_videos": total_videos,
+        "total_duration_seconds": total_duration_seconds,
+    }
 
+    
 def list_subscribed_videos(
     *,
     admin_id: int,
