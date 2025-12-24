@@ -1066,7 +1066,7 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
         params["admin_id"] = admin_id
 
     query += " ORDER BY created_at DESC"
-        
+
     with get_pg_cursor() as cur:
         cur.execute(query, params)
         rows = cur.fetchall()
@@ -1078,7 +1078,7 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
         if play_count <= 0:
             continue
 
-        # Derive duration in minutes using existing lecture metadata
+        # duration_minutes nikalna (pahle se tha)
         duration_minutes: Optional[int] = None
         if isinstance(record, dict):
             duration_candidates = [
@@ -1094,11 +1094,10 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
                     except (TypeError, ValueError):
                         continue
 
-
         lecture_uid = row.get("lecture_uid")
         lecture_url_value = record.get("lecture_url") or row.get("lecture_link")
 
-        # Resolve a playable video URL similar to lecture_routes playback logic
+        # 🔹 Yahan se video_url ka logic start hota hai
         video_url_value: Optional[str] = None
         try:
             if lecture_uid is not None:
@@ -1113,12 +1112,14 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
             if isinstance(candidate, str) and candidate.strip():
                 raw_url = candidate.strip()
                 if raw_url.startswith("http://") or raw_url.startswith("https://") or raw_url.startswith("//"):
-                    video_url_value = raw_url
+                    video_url_value = raw_url          # already full URL
                 else:
-                    video_url_value = get_file_url(raw_url)
+                    video_url_value = get_file_url(raw_url)  # local path → public URL
 
+        # Agar koi recording na mile to lecture_url pe fallback
         if video_url_value is None:
             video_url_value = lecture_url_value
+
         played.append(
             {
                 "lecture_id": lecture_uid,
@@ -1126,18 +1127,15 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
                 "language": record.get("language"),
                 "play_count": play_count,
                 "last_played_at": record.get("last_played_at"),
-                # "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
-                # "lecture_url": record.get("lecture_url") or row.get("lecture_link"),"cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
                 "lecture_url": lecture_url_value,
                 "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
                 "duration": duration_minutes,
-                "video_url": video_url_value,
+                "video_url": video_url_value,  # 👈 yahi field aapko response mein mil rahi hai
             }
         )
 
     played.sort(key=lambda item: item.get("last_played_at") or "", reverse=True)
     return played
-
 
 async def get_class_subject_filters() -> Dict[str, Any]:
     """Return normalized class/subject combinations present in the DB."""
