@@ -396,8 +396,16 @@ def get_student_profile(enrollment_number: str) -> StudentProfileResponse:
     return StudentProfileResponse(**profile)
 
 
-def get_roster_context(enrollment_number: str) -> Dict[str, Optional[str]]:
-    context = student_portal_repository.get_student_roster_context(enrollment_number)
+def get_roster_context(
+    enrollment_number: str,
+    *,
+    admin_id: Optional[int] = None,
+) -> Dict[str, Optional[str]]:
+    context = student_portal_repository.get_student_roster_context(
+        enrollment_number,
+        admin_id=admin_id,
+    )
+
     if context is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student is not in roster")
 
@@ -418,6 +426,7 @@ def get_roster_context(enrollment_number: str) -> Dict[str, Optional[str]]:
         "first_name": first_name.strip(),
         "last_name": last_name.strip(),
         "photo_path": context.get("photo_path"),
+        "member_id": context.get("assigned_member_id"),
     }
 
 
@@ -689,8 +698,20 @@ def add_video_comment(
     video = student_portal_video_repository.get_video(video_id)
     if video is None or video.get("admin_id") != current_context["admin_id"]:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+    roster_entry = student_portal_repository.get_student_roster_context(
+        enrollment_number,
+        admin_id=video.get("admin_id"),
+    )
+    if roster_entry is None or roster_entry.get("assigned_member_id") is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student roster assignment not found for this admin",
+        )
+    resolved_member_id = roster_entry["assigned_member_id"]
     record = student_portal_video_repository.add_comment(
         video_id=video_id,
+        admin_id=video["admin_id"],
+        member_id=resolved_member_id,
         enrollment_number=enrollment_number,
         comment=comment,
     )

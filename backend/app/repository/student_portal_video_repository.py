@@ -47,7 +47,9 @@ def _ensure_tables_exist() -> None:
         CREATE TABLE IF NOT EXISTS student_portal_video_comments (
             id SERIAL PRIMARY KEY,
             video_id INTEGER NOT NULL REFERENCES student_portal_videos(id) ON DELETE CASCADE,
+            admin_id INTEGER,
             enrollment_number TEXT,
+            member_id INTEGER,
             comment TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             like_count INTEGER NOT NULL DEFAULT 0
@@ -58,8 +60,18 @@ def _ensure_tables_exist() -> None:
         cur.execute(create_videos_sql)
         cur.execute(create_engagement_sql)
         cur.execute(create_comments_sql)
-
-
+        cur.execute(
+            """
+            ALTER TABLE student_portal_video_comments
+            ADD COLUMN IF NOT EXISTS member_id INTEGER
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE student_portal_video_comments
+            ADD COLUMN IF NOT EXISTS admin_id INTEGER
+            """
+        )
 _ensure_tables_exist()
 
 
@@ -906,26 +918,40 @@ def set_subscription_status(
 def add_comment(
     *,
     video_id: int,
+    admin_id: int,
     enrollment_number: Optional[str],
     comment: str,
+    member_id: Optional[int],
 ) -> Dict[str, Any]:
     payload = {
         "video_id": video_id,
         "enrollment": enrollment_number,
+        "admin_id": admin_id,
         "comment": comment.strip(),
         "created_at": datetime.utcnow(),
-    }
+        "member_id": member_id,
+        "enrollment_number": enrollment_number,
+        }
 
     query = """
         WITH inserted AS (
-            INSERT INTO student_portal_video_comments (video_id, enrollment_number, comment, created_at)
-            VALUES (%(video_id)s, %(enrollment)s, %(comment)s, %(created_at)s)
-            RETURNING id, video_id, enrollment_number, comment, created_at, like_count
+            INSERT INTO student_portal_video_comments (
+                video_id,
+                admin_id,
+                enrollment_number,
+                member_id,
+                comment,
+                created_at
+            )
+            VALUES (%(video_id)s, %(admin_id)s, %(enrollment)s, %(member_id)s, %(comment)s, %(created_at)s)
+            RETURNING id, video_id, admin_id, enrollment_number, member_id, comment, created_at, like_count
         )
         SELECT
             i.id,
             i.video_id,
+            i.admin_id,
             i.enrollment_number,
+            i.member_id,
             i.comment,
             i.created_at,
             i.like_count,
@@ -938,7 +964,7 @@ def add_comment(
         JOIN student_portal_videos v ON v.id = i.video_id
         LEFT JOIN student_profiles p ON LOWER(p.enrollment_number) = LOWER(i.enrollment_number)
         LEFT JOIN student_roster_entries r
-            ON LOWER(r.enrollment_number) = LOWER(i.enrollment_number)
+            ON LOWER(TRIM(r.enrollment_number)) = LOWER(TRIM(i.enrollment_number))
            AND r.admin_id = v.admin_id
     """
 
@@ -957,6 +983,8 @@ def list_comments(video_id: int) -> List[Dict[str, Any]]:
         SELECT
             c.id,
             c.video_id,
+            c.admin_id,
+            c.member_id,
             c.enrollment_number,
             c.comment,
             c.created_at,

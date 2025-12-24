@@ -73,7 +73,7 @@ TOPIC_PAGES_PER_CHUNK = int(os.getenv("TOPIC_PAGES_PER_CHUNK", "3"))
 
 TOPIC_EXTRACTION_PROMPT_TEMPLATE = (
     "You are given the extracted text of a textbook PDF below. "
-    "Use only that text and answer in {language_label}. "
+    "Use all provided content (text, tabular data, and visual information) to answer in {language_label}. "
     "Do not ask for uploads or mention that you need the PDF; you already have the content. "
     "Do not apologize, refuse, or say you cannot complete the task. "
     "Do not give any information that is not present in the provided text. "
@@ -92,7 +92,7 @@ TOPIC_EXTRACTION_PROMPT_TEMPLATE = (
     "- Subtopic Title: narration text covering all relevant sentences\n"
     "- Another Subtopic: narration text (continue as needed).\n"
     "Only output subtopics with real supporting narration; never use placeholders such as 'Information not available in provided text.'. "
-    "If the provided text does not contain sufficient detail for a specific chapter, skip that chapter instead of filling it with generic text."
+    "If the provided text does not contain enough details for a topic or subtopic, instead of apologizing."
 )
 LANGUAGE_SPECS: Dict[str, Dict[str, Any]] = {
     "guj": {

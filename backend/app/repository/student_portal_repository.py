@@ -334,7 +334,11 @@ def get_student_profile_by_id(profile_id: int) -> Optional[Dict[str, Any]]:
         return _row_to_profile(cur.fetchone())
 
 
-def get_student_roster_context(enrollment_number: str) -> Optional[Dict[str, Any]]:
+def get_student_roster_context(
+    enrollment_number: str,
+    *,
+    admin_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
     query = """
         SELECT
             r.admin_id,
@@ -347,15 +351,18 @@ def get_student_roster_context(enrollment_number: str) -> Optional[Dict[str, Any
             p.class_stream AS profile_class_stream,
             p.division AS profile_division,
             p.photo_path
+            r.assigned_member_id
         FROM student_roster_entries r
         LEFT JOIN student_profiles p
             ON LOWER(TRIM(p.enrollment_number)) = LOWER(TRIM(r.enrollment_number))
         WHERE LOWER(TRIM(r.enrollment_number)) = LOWER(TRIM(%(enrollment_number)s))
+        AND COALESCE(r.admin_id, 0) = COALESCE(%(admin_id)s, r.admin_id)
         LIMIT 1
     """
+    params: Dict[str, Any] = {"enrollment_number": enrollment_number, "admin_id": admin_id}
 
     with get_pg_cursor() as cur:
-        cur.execute(query, {"enrollment_number": enrollment_number})
+        cur.execute(query, params)
         return cur.fetchone()
 
 
