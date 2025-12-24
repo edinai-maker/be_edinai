@@ -170,10 +170,10 @@ def detect_science_content(text: str) -> bool:
 def _get_word_targets(duration: int) -> Dict[str, str]:
     """Return intro/normal/deep word targets for supported durations."""
     if duration == 30:
-        return {"intro": "140-170", "normal": "200-250", "deep": "300-350"}
+        return {"intro": "180-220", "normal": "260-320", "deep": "420-520"}
     if duration == 45:
-        return {"intro": "170-220", "normal": "200-250", "deep": "350-400"}
-    return {"intro": "220-260", "normal": "250-300", "deep": "400-450"}
+        return {"intro": "320-420", "normal": "450-550", "deep": "750-900"}
+    return {"intro": "420-520", "normal": "580-680", "deep": "900-1100"}
 
 
 def create_lecture_prompt(*, text: str, language: str, duration: int, style: str) -> str:
@@ -548,8 +548,20 @@ class GroqService:
                         "title": slide.get("title", ""),
                         "summary": summary
                     }]
+            
+        # Ensure minimum narration lengths before estimating duration
+        self._enforce_minimum_narration(
+            slides,
+            language,
+            requested_duration=duration,
+        )
         
         await self._enforce_language_output(slides, language)
+        estimated_duration = self._estimate_duration_minutes(
+            slides,
+            requested_duration=estimated_duration,
+            language=language,
+        )
         
         return {
             "slides": slides,
@@ -1088,14 +1100,16 @@ class GroqService:
         try:
             estimated_duration = int(estimated)
         except (TypeError, ValueError):
-            estimated_duration = len(normalized_slides) * 3
+            estimated_duration = 0
 
         self._attach_subtopics_to_slides(normalized_slides)
+
+        computed_estimate = self._estimate_duration_minutes(normalized_slides)
         
         return {
             "slides": normalized_slides,
             "total_slides": len(normalized_slides),
-            "estimated_duration": max(estimated_duration, len(normalized_slides) * 3),
+            "estimated_duration": max(estimated_duration, computed_estimate),
         }
     
     def _parse_text_format(self, response: str) -> Dict[str, Any]:
@@ -1164,7 +1178,79 @@ class GroqService:
                 slides.append(slide_data)
         
         self._attach_subtopics_to_slides(slides)
-        return {"slides": slides, "total_slides": len(slides), "estimated_duration": len(slides) * 3}
+        return {
+            "slides": slides,
+            "total_slides": len(slides),
+            "estimated_duration": self._estimate_duration_minutes(slides),
+        }
+
+    def _estimate_duration_minutes(
+        self,
+        slides: List[Dict[str, Any]],
+        *,
+        requested_duration: Optional[int] = None,
+        language: Optional[str] = None,
+    ) -> int:
+        """Estimate lecture playback duration based on textual content."""
+
+        if not slides:
+            return int(requested_duration or 0)
+
+        total_words = 0
+        for slide in slides:
+            if not isinstance(slide, dict):
+                continue
+
+            sections: List[str] = []
+
+            for field in ("title", "narration", "question"):
+                value = slide.get(field)
+                if isinstance(value, str) and value.strip():
+                    sections.append(value)
+
+            bullets = slide.get("bullets")
+            if isinstance(bullets, list):
+                for bullet in bullets:
+                    if isinstance(bullet, str) and bullet.strip():
+                        sections.append(bullet)
+
+            subnarrations = slide.get("subnarrations")
+            if isinstance(subnarrations, list):
+                for sub in subnarrations:
+                    if isinstance(sub, dict):
+                        summary = sub.get("summary")
+                        if isinstance(summary, str) and summary.strip():
+                            sections.append(summary)
+
+            for section in sections:
+                total_words += len(section.split())
+
+        average_wpm = self._resolve_average_wpm(language)
+        estimated_minutes = int(round(total_words / average_wpm)) if total_words else 0
+
+        # Ensure minimum of 1 minute per populated slide to avoid zero estimates for sparse content
+        populated_slide_count = sum(1 for slide in slides if isinstance(slide, dict) and slide.get("narration"))
+        estimated_minutes = max(estimated_minutes, populated_slide_count)
+
+        if requested_duration:
+            # Never exceed 20% above the requested duration to avoid unrealistic inflation
+            upper_cap = int(round(requested_duration * 1.2))
+            estimated_minutes = min(estimated_minutes, upper_cap)
+
+        return estimated_minutes
+
+    @staticmethod
+    def _resolve_average_wpm(language: Optional[str]) -> int:
+        """Return a reasonable words-per-minute rate for narration."""
+
+        normalized = (language or "").strip().lower()
+        if normalized == "english":
+            return 135
+        if normalized == "hindi":
+            return 118
+        if normalized == "gujarati":
+            return 112
+        return 130
     
     
     def _validate_language_mixing(self, parsed: Dict[str, Any], language: str) -> List[str]:
@@ -1206,7 +1292,10 @@ class GroqService:
                     errors.append(f"Slide {idx + 1}: Found '{wrong}' - should be '{correct}'")
             
             word_count = len(narration.split())
-            min_words = self._get_minimum_word_requirement(number)
+            min_words = self._get_minimum_word_requirement(
+                number,
+                requested_duration=requested_duration,
+            )
             
             if number == 9 and not narration and slide.get("question"):
                 continue
@@ -1315,11 +1404,20 @@ class GroqService:
         
         return text
     
-    def _enforce_minimum_narration(self, slides: List[Dict[str, Any]], language: str) -> None:
+    def _enforce_minimum_narration(
+        self,
+        slides: List[Dict[str, Any]],
+        language: str,
+        *,
+        requested_duration: Optional[int] = None,
+    ) -> None:
         """Pad narrations to satisfy minimum word requirements."""
         for idx, slide in enumerate(slides):
             number = slide.get("number") or idx + 1
-            min_words = self._get_minimum_word_requirement(number)
+            min_words = self._get_minimum_word_requirement(
+                number,
+                requested_duration=requested_duration,
+            )
             if not min_words:
                 continue
             
@@ -1335,15 +1433,48 @@ class GroqService:
             )
             slide["narration"] = f"{narration}\n\n{padding}".strip() if narration else padding
     
-    @staticmethod
-    def _get_minimum_word_requirement(slide_number: int) -> int:
+    def _get_minimum_word_requirement(
+        self,
+        slide_number: int,
+        *,
+        requested_duration: Optional[int] = None,
+    ) -> int:
         """Get minimum word count for each slide."""
+        if not requested_duration:
+            if slide_number == 1:
+                return 100
+            if 4 <= slide_number <= 7:
+                return 250
+            if slide_number == 8:
+                return 180
+            return 0
+
+        word_targets = _get_word_targets(requested_duration)
+
+        def _avg_from_range(value: str) -> int:
+            numbers = [int(match) for match in re.findall(r"\d+", value or "")]
+            if not numbers:
+                return 0
+            if len(numbers) == 1:
+                return numbers[0]
+            return sum(numbers[:2]) // 2
+
+        intro_target = _avg_from_range(word_targets.get("intro", ""))
+        normal_target = _avg_from_range(word_targets.get("normal", ""))
+        deep_target = _avg_from_range(word_targets.get("deep", ""))
+
+        intro_min = max(150, int(round(intro_target * 0.9))) if intro_target else 200
+        normal_min = max(220, int(round(normal_target * 0.9))) if normal_target else 280
+        deep_min = max(320, int(round(deep_target * 0.85))) if deep_target else 360
+        quiz_min = max(180, int(round(normal_min * 0.6)))
         if slide_number == 1:
-            return 100
+            return intro_min
+        if slide_number in (2, 3, 8):
+            return normal_min
         if 4 <= slide_number <= 7:
-            return 250
-        if slide_number == 8:
-            return 180
+            return deep_min
+        if slide_number == 9:
+            return quiz_min
         return 0
     
     def _build_padding_text(
