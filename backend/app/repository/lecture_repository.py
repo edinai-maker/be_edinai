@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.postgres import get_pg_cursor
 from app.models.chapter_material import LectureGen
+from app.repository import student_portal_video_repository
+from app.utils.file_handler import get_file_url
 
 def _slugify(value: Any) -> str:
     """Convert metadata values to slug format for comparisons."""
@@ -1092,18 +1094,44 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
                     except (TypeError, ValueError):
                         continue
 
+
+        lecture_uid = row.get("lecture_uid")
+        lecture_url_value = record.get("lecture_url") or row.get("lecture_link")
+
+        # Resolve a playable video URL similar to lecture_routes playback logic
+        video_url_value: Optional[str] = None
+        try:
+            if lecture_uid is not None:
+                video_record = student_portal_video_repository.get_latest_video_for_lecture(str(lecture_uid))
+            else:
+                video_record = None
+        except Exception:
+            video_record = None
+
+        if isinstance(video_record, dict):
+            candidate = video_record.get("video_url")
+            if isinstance(candidate, str) and candidate.strip():
+                raw_url = candidate.strip()
+                if raw_url.startswith("http://") or raw_url.startswith("https://") or raw_url.startswith("//"):
+                    video_url_value = raw_url
+                else:
+                    video_url_value = get_file_url(raw_url)
+
+        if video_url_value is None:
+            video_url_value = lecture_url_value
         played.append(
             {
-                "lecture_id": row.get("lecture_uid"),
+                "lecture_id": lecture_uid,
                 "title": record.get("title") or row.get("lecture_title"),
                 "language": record.get("language"),
                 "play_count": play_count,
                 "last_played_at": record.get("last_played_at"),
                 # "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
                 # "lecture_url": record.get("lecture_url") or row.get("lecture_link"),"cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
-                "lecture_url": record.get("lecture_url") or row.get("lecture_link"),
+                "lecture_url": lecture_url_value,
                 "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
                 "duration": duration_minutes,
+                "video_url": video_url_value,
             }
         )
 
