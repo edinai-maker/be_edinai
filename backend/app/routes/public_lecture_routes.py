@@ -174,7 +174,6 @@ async def list_played_public_lectures(
     repository: LectureRepository = Depends(get_repository),
 ) -> Dict[str, Any]:
     admin_id = current_user.get("admin_id")
-    # lectures = await repository.list_played_lectures(admin_id=admin_id)
     # Extract admin_id: for admins it's in "id", for members it's in "admin_id"
     if current_user.get("role") == "admin":
         admin_id = current_user.get("id")

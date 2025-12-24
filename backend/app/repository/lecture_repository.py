@@ -1066,7 +1066,7 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
         params["admin_id"] = admin_id
 
     query += " ORDER BY created_at DESC"
-
+        
     with get_pg_cursor() as cur:
         cur.execute(query, params)
         rows = cur.fetchall()
@@ -1078,7 +1078,7 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
         if play_count <= 0:
             continue
 
-        # duration_minutes nikalna (pahle se tha)
+         # duration calculate karna
         duration_minutes: Optional[int] = None
         if isinstance(record, dict):
             duration_candidates = [
@@ -1094,47 +1094,48 @@ async def list_played_lectures(admin_id: Optional[int] = None) -> List[Dict[str,
                     except (TypeError, ValueError):
                         continue
 
-    lecture_uid = row.get("lecture_uid")
-    lecture_url_value = record.get("lecture_url") or row.get("lecture_link")
+        lecture_uid = row.get("lecture_uid")
+        lecture_url_value = record.get("lecture_url") or row.get("lecture_link")
 
-    video_url_value: Optional[str] = None
-    try:
-        if lecture_uid is not None:
-            video_record = student_portal_video_repository.get_latest_video_for_lecture(str(lecture_uid))
-        else:
-            video_record = None
-    except Exception:
-        video_record = None
-
-    if isinstance(video_record, dict):
-        candidate = video_record.get("video_url")
-        if isinstance(candidate, str) and candidate.strip():
-            raw_url = candidate.strip()
-            if raw_url.startswith("http://") or raw_url.startswith("https://") or raw_url.startswith("//"):
-                video_url_value = raw_url
+        # Latest video URL nikalna
+        video_url_value: Optional[str] = None
+        try:
+            if lecture_uid is not None:
+                video_record = student_portal_video_repository.get_latest_video_for_lecture(str(lecture_uid))
             else:
-                video_url_value = get_file_url(raw_url)
+                video_record = None
+        except Exception:
+            video_record = None
 
-    if video_url_value is None:
-        video_url_value = lecture_url_value
+        if isinstance(video_record, dict):
+            candidate = video_record.get("video_url")
+            if isinstance(candidate, str) and candidate.strip():
+                raw_url = candidate.strip()
+                if raw_url.startswith("http://") or raw_url.startswith("https://") or raw_url.startswith("//"):
+                    video_url_value = raw_url
+                else:
+                    video_url_value = get_file_url(raw_url)
 
-    played.append(
-        {
-            "lecture_id": lecture_uid,
-            "title": record.get("title") or row.get("lecture_title"),
-            "language": record.get("language"),
-            "play_count": play_count,
-            "last_played_at": record.get("last_played_at"),
-            "lecture_url": lecture_url_value,
-            "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
-            "duration": duration_minutes,
-            "video_url": video_url_value,  # 👈 yehi response mein aa raha hai
-        }
-    )
+        if video_url_value is None:
+            video_url_value = lecture_url_value
 
+        played.append(
+            {
+                "lecture_id": lecture_uid,
+                "title": record.get("title") or row.get("lecture_title"),
+                "language": record.get("language"),
+                "play_count": play_count,
+                "last_played_at": record.get("last_played_at"),
+                "lecture_url": lecture_url_value,
+                "cover_photo_url": record.get("cover_photo_url") or row.get("cover_photo_url"),
+                "duration": duration_minutes,
+                "video_url": video_url_value,
+            }
+        )
 
     played.sort(key=lambda item: item.get("last_played_at") or "", reverse=True)
     return played
+
 
 async def get_class_subject_filters() -> Dict[str, Any]:
     """Return normalized class/subject combinations present in the DB."""

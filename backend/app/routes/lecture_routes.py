@@ -1197,12 +1197,31 @@ async def get_playback_payload(
         subject_value = (metadata.get("subject") or "lecture").strip().lower().replace(" ", "_")
         lecture_url = f"/lectures/{std_value}/{subject_value}/{requested_id}.json"
 
+    video_url: Optional[str] = None
+    try:
+        video_record = student_portal_video_repository.get_latest_video_for_lecture(requested_id)
+    except Exception:
+        video_record = None
+
+    if isinstance(video_record, dict):
+        candidate = video_record.get("video_url")
+        if isinstance(candidate, str) and candidate.strip():
+            raw_url = candidate.strip()
+            if raw_url.startswith("http://") or raw_url.startswith("https://") or raw_url.startswith("//"):
+                video_url = raw_url
+            else:
+                video_url = get_file_url(raw_url)
+
+    if video_url is None:
+        video_url = lecture_url
+
     return {
         "lecture_id": requested_id,
         "title": record.get("title"),
         "cover_photo_url": record.get("cover_photo_url"),
         "lecture_url": lecture_url,
         "duration": duration_minutes,
+        "video_url": video_url,
     }
 
 
