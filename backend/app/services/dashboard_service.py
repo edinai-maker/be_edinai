@@ -12,6 +12,7 @@ from ..repository import (
     member_repository,
     student_management_repository as roster_repository,
     member_repository,
+    student_portal_video_repository,
 )
 from ..repository.chapter_material_repository import get_chapter_overview_data
 from ..schemas import AdminResponse, MemberResponse, PackageResponse, WorkType
@@ -574,12 +575,13 @@ def get_member_dashboard(*, member_id: int, admin_id: int, work_type: str) -> Di
             "chapter_overview": chapter_overview
         }
     elif work_type == "student":
-        total_chapters = dashboard_repository.count_members(admin_id, work_type="chapter", active_only=True)
-        total_lectures = 0  # Student dashboard must mirror legacy SM API (static lecture counts)
+        # total_chapters = dashboard_repository.count_members(admin_id, work_type="chapter", active_only=True)
+        totals = student_portal_video_repository.get_video_totals_for_std(admin_id=admin_id, std=None)
+        total_lectures = totals.get("total_videos", 0) # Student dashboard must mirror legacy SM API (static lecture counts)
         total_students = roster_repository.count_roster_students(admin_id, member_id=member_id)
         payload = {
             "student_metrics": {
-                "total_chapters": total_chapters,
+                # "total_chapters": total_chapters,
                 "total_lectures": total_lectures,
                 "total_students": total_students,
                 "total_paid": 0,
