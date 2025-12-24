@@ -468,6 +468,8 @@ def list_all_videos_for_student(
         videos.append(base)
     return videos
 
+
+
 def list_related_videos(
     *,
     admin_id: int,
@@ -633,7 +635,7 @@ def get_video_totals_for_std(*, admin_id: int, std: Optional[str]) -> Dict[str, 
         "total_duration_seconds": total_duration_seconds,
     }
 
-    
+
 def list_subscribed_videos(
     *,
     admin_id: int,
@@ -948,6 +950,8 @@ def add_comment(
     return record
 
 
+
+
 def list_comments(video_id: int) -> List[Dict[str, Any]]:
     query = """
         SELECT
@@ -1019,6 +1023,25 @@ def get_watch_summary(
         "completed_videos": summary.get("completed_videos", 0),
         "total_records": summary.get("total_records", 0),
     }
+
+def get_latest_video_for_lecture(lecture_id: str) -> Optional[Dict[str, Any]]:
+    params = {"lecture_id": lecture_id}
+
+    query = """
+        SELECT *
+        FROM student_portal_videos
+        WHERE
+            video_url LIKE '%%/lectures/%%/' || %(lecture_id)s || '.json'
+            OR video_url LIKE '%%/lectures/%%/' || %(lecture_id)s || '/%%'
+        ORDER BY created_at DESC
+        LIMIT 1
+    """
+
+    with get_pg_cursor() as cur:
+        cur.execute(query, params)
+        row = cur.fetchone()
+
+    return _row_to_video(row)
 
 
 def delete_lecture_videos_by_lecture_id(*, admin_id: int, lecture_id: str) -> int:
