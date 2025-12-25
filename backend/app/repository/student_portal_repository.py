@@ -97,18 +97,18 @@ def _row_to_profile(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
     photo_path = data.get("photo_path")
     if photo_path:
-        # Normalize stored filesystem path to a web URL path
-        # Examples:
-        #   "backend/uploads/..." -> "/uploads/..."
-        #   "./uploads/..."       -> "/uploads/..."
         url_path = str(photo_path).replace("\\", "/")
-        if url_path.startswith("backend/"):
-            url_path = url_path[len("backend/"):]
-        if url_path.startswith("./"):
-            url_path = url_path[2:]
-        if not url_path.startswith("/"):
-            url_path = "/" + url_path
-        data["photo_path"] = url_path
+        if url_path.startswith("http://") or url_path.startswith("https://"):
+            data["photo_path"] = url_path
+        else:
+            url_path = str(photo_path).replace("\\", "/")
+            if url_path.startswith("backend/"):
+                url_path = url_path[len("backend/"):]
+            if url_path.startswith("./"):
+                url_path = url_path[2:]
+            if not url_path.startswith("/"):
+                url_path = "/" + url_path
+            data["photo_path"] = url_path
 
     return data
 

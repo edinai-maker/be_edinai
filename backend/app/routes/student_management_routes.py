@@ -978,12 +978,13 @@ async def list_all_video_comments(
         {
             "student_name": comment.get("student_name"),
             "comment": comment.get("comment"),
-            "commented_at": (
-                (parsed := _parse_comment_timestamp(comment.get("created_at")))
-                and parsed.isoformat()
-            )
-            or comment.get("created_at"),
+            # "commented_at": (
+            #     (parsed := _parse_comment_timestamp(comment.get("created_at")))
+            #     and parsed.isoformat()
+            # )
+            # or comment.get("created_at"),
             "commented_time_ago": _format_relative_time(_parse_comment_timestamp(comment.get("created_at"))),
+            "photo_path":comment.get("student_photo_path")
         }
         for comment in comments
     ]
@@ -993,7 +994,7 @@ async def list_all_video_comments(
         data={"comments": simplified_comments},
     )
 
-@router.delete("/comment/enrollment/{enrollment_number}", response_model=ResponseBase)
+@router.delete("/comment/delete/{enrollment_number}", response_model=ResponseBase)
 async def delete_video_comments_by_enrollment(
     enrollment_number: str,
     current_user: dict = Depends(member_required(WorkType.STUDENT)),

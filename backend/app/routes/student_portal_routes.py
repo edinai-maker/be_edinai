@@ -29,6 +29,7 @@ from ..schemas.student_portal_schema import (
 from ..realtime.socket_server import broadcast_chat_message
 from ..repository import student_portal_video_repository
 from ..services import student_portal_service
+from ..utils import s3_file_handler
 from ..utils.dependencies import get_current_user
 from ..utils.file_handler import save_uploaded_file
 
@@ -133,8 +134,31 @@ async def create_or_update_student_profile(
 ):
     saved_photo_path: Optional[str] = None
     if photo is not None:
-        upload_info = await save_uploaded_file(photo, subfolder="student-profiles")
-        saved_photo_path = upload_info["file_path"]
+        try:
+            if settings.s3_enabled:
+                if not (settings.aws_access_key_id and settings.aws_secret_access_key and settings.aws_s3_bucket_name):
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="S3 is not configured",
+                    )
+
+                s3_service = s3_file_handler.get_s3_service(settings)
+                upload_info = await s3_file_handler.upload_image_to_s3(
+                    photo,
+                    s3_service,
+                    subfolder="student-profiles",
+                )
+                saved_photo_path = upload_info.get("s3_url")
+            else:
+                upload_info = await save_uploaded_file(photo, subfolder="student-profiles")
+                saved_photo_path = upload_info["file_path"]
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to upload profile photo: {exc}",
+            ) from exc
 
     profile = student_portal_service.upsert_student_profile(
         first_name=first_name,

@@ -1048,6 +1048,7 @@ def list_comments(video_id: int) -> List[Dict[str, Any]]:
             c.comment,
             c.created_at,
             c.like_count,
+            p.photo_path AS student_photo_path,
             COALESCE(
                 NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.middle_name)), ''),
                 NULLIF(TRIM(CONCAT_WS(' ', r.first_name, r.last_name)), ''),
