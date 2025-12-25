@@ -1,6 +1,6 @@
 """Repository helpers for managing student portal videos and engagements."""
 from __future__ import annotations
-
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -976,7 +976,66 @@ def add_comment(
     return record
 
 
+def delete_comment(
+    *,
+    admin_id: int,
+    comment_id: int,
+) -> Optional[Dict[str, Any]]:
+    query = """
+        WITH deleted AS (
+            DELETE FROM student_portal_video_comments AS c
+            USING student_portal_videos AS v
+            WHERE c.id = %(comment_id)s
+              AND v.id = c.video_id
+              AND v.admin_id = %(admin_id)s
+            RETURNING c.id, c.video_id, c.enrollment_number, c.comment, c.created_at, c.like_count
+        )
+        SELECT * FROM deleted
+    """
 
+    with get_pg_cursor() as cur:
+        cur.execute(query, {"comment_id": comment_id, "admin_id": admin_id})
+        record = cur.fetchone()
+
+    if record:
+        _update_video_totals(record["video_id"], total_comments=-1)
+
+    return record
+
+
+def delete_comments_by_enrollment(
+    *,
+    admin_id: int,
+    enrollment_number: str,
+) -> List[Dict[str, Any]]:
+    query = """
+        WITH deleted AS (
+            DELETE FROM student_portal_video_comments AS c
+            USING student_portal_videos AS v
+            WHERE v.id = c.video_id
+              AND v.admin_id = %(admin_id)s
+              AND LOWER(c.enrollment_number) = LOWER(%(enrollment)s)
+            RETURNING c.id, c.video_id, c.enrollment_number, c.comment, c.created_at, c.like_count
+        )
+        SELECT * FROM deleted
+    """
+
+    with get_pg_cursor() as cur:
+        cur.execute(
+            query,
+            {
+                "admin_id": admin_id,
+                "enrollment": enrollment_number,
+            },
+        )
+        records = cur.fetchall()
+
+    if records:
+        per_video = Counter(record.get("video_id") for record in records if record.get("video_id") is not None)
+        for video_id, count in per_video.items():
+            _update_video_totals(video_id, total_comments=-count)
+
+    return records
 
 def list_comments(video_id: int) -> List[Dict[str, Any]]:
     query = """
@@ -1006,6 +1065,35 @@ def list_comments(video_id: int) -> List[Dict[str, Any]]:
 
     with get_pg_cursor() as cur:
         cur.execute(query, {"video_id": video_id})
+        return cur.fetchall()
+
+def list_comments_for_admin(admin_id: int) -> List[Dict[str, Any]]:
+    query = """
+        SELECT
+            c.id,
+            c.video_id,
+            c.enrollment_number,
+            c.comment,
+            c.created_at,
+            c.like_count,
+            COALESCE(
+                NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.middle_name)), ''),
+                NULLIF(TRIM(CONCAT_WS(' ', r.first_name, r.last_name)), ''),
+                NULLIF(c.enrollment_number, '')
+            ) AS student_name,
+            v.title AS video_title
+        FROM student_portal_video_comments c
+        JOIN student_portal_videos v ON v.id = c.video_id
+        LEFT JOIN student_profiles p ON LOWER(p.enrollment_number) = LOWER(c.enrollment_number)
+        LEFT JOIN student_roster_entries r
+            ON LOWER(r.enrollment_number) = LOWER(c.enrollment_number)
+           AND r.admin_id = v.admin_id
+        WHERE v.admin_id = %(admin_id)s
+        ORDER BY c.created_at DESC
+    """
+
+    with get_pg_cursor() as cur:
+        cur.execute(query, {"admin_id": admin_id})
         return cur.fetchall()
 
 

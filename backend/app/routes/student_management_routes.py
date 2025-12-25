@@ -5,6 +5,7 @@ import base64
 import csv
 import io
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -49,6 +50,81 @@ EXCEL_MIME_TYPES = {
 }
 CSV_MIME_TYPES = {"text/csv", "application/csv", "application/vnd.ms-excel"}
 
+def _parse_comment_timestamp(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _format_relative_time(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    delta = now - dt
+
+    if delta.total_seconds() < 0:
+        return "just now"
+
+    seconds = int(delta.total_seconds())
+    minutes = seconds // 60
+    hours = seconds // 3600
+    days = delta.days
+
+    if seconds < 60:
+        return "just now"
+    if seconds < 120:
+        return "1 minute ago"
+    if minutes < 60:
+        return f"{minutes} minutes ago"
+    if hours == 1:
+        return "1 hour ago"
+    if hours < 24:
+        return f"{hours} hours ago"
+    if days == 1:
+        return "Yesterday"
+    if days < 7:
+        return f"{days} days ago"
+    weeks = days // 7
+    if weeks == 1:
+        return "1 week ago"
+    if days < 30:
+        return f"{weeks} weeks ago"
+    months = days // 30
+    if months == 1:
+        return "1 month ago"
+    if months < 12:
+        return f"{months} months ago"
+    years = days // 365
+    if years == 1:
+        return "1 year ago"
+    return f"{years} years ago"
+
+
+def _stream_excel(headers: List[str]) -> StreamingResponse:
+    buffer = io.BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Student Roster"
+    sheet.append(headers)
+    workbook.save(buffer)
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="student_roster_template.xlsx"'},
+    )
 
 def _stream_excel(headers: List[str]) -> StreamingResponse:
     buffer = io.BytesIO()
@@ -888,6 +964,52 @@ async def list_student_filters(
         status=True,
         message="Class and division filters fetched successfully",
         data=filters,
+    )
+
+
+@router.get("/comment", response_model=ResponseBase)
+async def list_all_video_comments(
+    current_user: dict = Depends(member_required(WorkType.STUDENT)),
+) -> ResponseBase:
+    comments = student_portal_service.list_all_video_comments_for_admin(
+        admin_id=current_user["admin_id"],
+    )
+    simplified_comments = [
+        {
+            "student_name": comment.get("student_name"),
+            "comment": comment.get("comment"),
+            "commented_at": (
+                (parsed := _parse_comment_timestamp(comment.get("created_at")))
+                and parsed.isoformat()
+            )
+            or comment.get("created_at"),
+            "commented_time_ago": _format_relative_time(_parse_comment_timestamp(comment.get("created_at"))),
+        }
+        for comment in comments
+    ]
+    return ResponseBase(
+        status=True,
+        message="Comments fetched successfully",
+        data={"comments": simplified_comments},
+    )
+
+@router.delete("/comment/enrollment/{enrollment_number}", response_model=ResponseBase)
+async def delete_video_comments_by_enrollment(
+    enrollment_number: str,
+    current_user: dict = Depends(member_required(WorkType.STUDENT)),
+) -> ResponseBase:
+    deleted = student_portal_service.delete_video_comments_for_admin_by_enrollment(
+        admin_id=current_user["admin_id"],
+        enrollment_number=enrollment_number,
+    )
+
+    return ResponseBase(
+        status=True,
+        message="Comments deleted successfully",
+        data={
+            "deleted_count": len(deleted),
+            "comments": deleted,
+        },
     )
 
 @router.get("/lectures", response_model=ResponseBase)

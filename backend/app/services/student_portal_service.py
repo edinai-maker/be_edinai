@@ -687,7 +687,56 @@ def list_video_comments(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
     return student_portal_video_repository.list_comments(video_id)
 
+def list_all_video_comments_for_admin(*, admin_id: int) -> List[Dict[str, Any]]:
+    return student_portal_video_repository.list_comments_for_admin(admin_id)
 
+
+def list_video_comments_for_admin(
+    *,
+    admin_id: int,
+    video_id: int,
+) -> List[Dict[str, Any]]:
+    video = student_portal_video_repository.get_video(video_id)
+    if video is None or video.get("admin_id") != admin_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+    return student_portal_video_repository.list_comments(video_id)
+
+def delete_video_comment_for_admin(
+    *,
+    admin_id: int,
+    comment_id: int,
+) -> Dict[str, Any]:
+    record = student_portal_video_repository.delete_comment(
+        admin_id=admin_id,
+        comment_id=comment_id,
+    )
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+    return record
+
+
+def delete_video_comments_for_admin_by_enrollment(
+    *,
+    admin_id: int,
+    enrollment_number: str,
+) -> List[Dict[str, Any]]:
+    normalized = _sanitize(enrollment_number)
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Enrollment number is required",
+        )
+
+    records = student_portal_video_repository.delete_comments_by_enrollment(
+        admin_id=admin_id,
+        enrollment_number=normalized,
+    )
+
+    if not records:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No comments found for enrollment")
+
+    return records
+    
 def add_video_comment(
     *,
     current_context: Dict[str, Optional[str]],
