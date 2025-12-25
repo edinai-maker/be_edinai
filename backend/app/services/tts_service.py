@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class GoogleTTSService:
     """Wrapper around Google Cloud Text-to-Speech client."""
 
-    _CHUNK_CHAR_LIMIT = 2500
+    _CHUNK_CHAR_LIMIT = 4500
     _SENTENCE_CHAR_LIMIT = 200
     _SENTENCE_ENDINGS = ".!?।！？"
     _SENTENCE_DELIMITER_PATTERN = re.compile(r"(?<=[.!?।！？])\s+|[\r\n]+")
@@ -255,19 +255,20 @@ class GoogleTTSService:
             return
 
         current_chunk: list[str] = []
-        current_length = 0
+        current_bytes = 0
 
         for segment in segments:
             for safe_segment in self._split_long_segment(segment):
-                addition = len(safe_segment) + (1 if current_chunk else 0)
-                if current_length + addition <= self._CHUNK_CHAR_LIMIT:
+                segment_bytes = len(safe_segment.encode("utf-8"))
+                addition = segment_bytes + (1 if current_chunk else 0)
+                if current_bytes + addition <= self._CHUNK_BYTE_LIMIT:
                     current_chunk.append(safe_segment)
-                    current_length += addition
+                    current_bytes += addition
                 else:
                     if current_chunk:
                         yield " ".join(current_chunk)
                     current_chunk = [safe_segment]
-                    current_length = len(safe_segment)
+                    current_bytes = segment_bytes
 
         if current_chunk:
             yield " ".join(current_chunk)
@@ -349,4 +350,3 @@ class GoogleTTSService:
 
 
 
-        

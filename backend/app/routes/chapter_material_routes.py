@@ -1657,6 +1657,17 @@ async def extract_topics_from_materials(
 
                     # Return only topics with a single chapter title value
                     topics = extraction.get("topics", [])
+                    if not topics:
+                        entry["error"] = extraction.get("error") or (
+                            "Topic extraction did not return any content."
+                        )
+                        entry["error_type"] = extraction.get("error_type") or "NO_TEXT_EXTRACTED"
+                        topics_by_material.append(entry)
+                        logger.warning(
+                            "Topic extraction produced no topics for material %s (treated as failure)",
+                            material_id,
+                        )
+                        continue
                     material_chapter_number = material.get("chapter_number") if isinstance(material, dict) else material.chapter_number
                     chapter_title = (
                         extraction.get("chapter_title")
@@ -1693,21 +1704,15 @@ async def extract_topics_from_materials(
         # Calculate statistics
         successful_count = sum(1 for item in topics_by_material if item.get("topics"))
         failed_count = sum(1 for item in topics_by_material if item.get("error"))
-        errors_payload = [
-            {
-                "material_id": item["material_id"],
-                "error": item.get("error"),
-                "error_type": item.get("error_type"),
-            }
-            for item in topics_by_material
-            if item.get("error")
-        ]
         if successful_count == 0:
+            logger.warning(
+                "Topic extraction failed for all %s materials",
+                len(material_ids),
+            )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "message": "Topic extraction failed for all provided materials.",
-                    "errors": errors_payload,
+                    "message": "Topic extraction failed for all provided materials."
                 },
             )
         message = (
@@ -1729,7 +1734,6 @@ async def extract_topics_from_materials(
                 "total_materials": len(material_ids),
                 "successful_extractions": successful_count,
                 "failed_extractions": failed_count,
-                "errors": errors_payload,
             }
         }
         
