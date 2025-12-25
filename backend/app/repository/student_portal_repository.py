@@ -350,7 +350,7 @@ def get_student_roster_context(
             p.first_name AS profile_first_name,
             p.class_stream AS profile_class_stream,
             p.division AS profile_division,
-            p.photo_path
+            p.photo_path,
             r.assigned_member_id
         FROM student_roster_entries r
         LEFT JOIN student_profiles p
