@@ -38,3 +38,12 @@ class Settings(BaseSettings):
         ["http://localhost:3000", "http://127.0.0.1:3000"],
         env="CORS_ORIGINS",
     )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return a cached Settings instance."""
+    return Settings()
+
+
+settings = get_settings()
