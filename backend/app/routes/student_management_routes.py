@@ -988,12 +988,15 @@ async def list_all_video_comments(
         }
         for comment in comments
     ]
+    comment_count = len(simplified_comments)
     return ResponseBase(
         status=True,
         message="Comments fetched successfully",
-        data={"comments": simplified_comments},
+        data={
+            "count": comment_count,
+            "comments": simplified_comments,
+        },
     )
-
 @router.delete("/comment/delete/{enrollment_number}", response_model=ResponseBase)
 async def delete_video_comments_by_enrollment(
     enrollment_number: str,

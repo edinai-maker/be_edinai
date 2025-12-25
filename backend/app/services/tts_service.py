@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class GoogleTTSService:
     """Wrapper around Google Cloud Text-to-Speech client."""
 
-    _CHUNK_CHAR_LIMIT = 4500
+    _CHUNK_BYTE_LIMIT = 4500
     _SENTENCE_CHAR_LIMIT = 200
     _SENTENCE_ENDINGS = ".!?।！？"
     _SENTENCE_DELIMITER_PATTERN = re.compile(r"(?<=[.!?।！？])\s+|[\r\n]+")
