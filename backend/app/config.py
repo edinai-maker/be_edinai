@@ -39,6 +39,21 @@ class Settings(BaseSettings):
         env="CORS_ORIGINS",
     )
 
+    # Redis / Topic Extraction Queue
+    redis_url: Optional[str] = Field(None, env="REDIS_URL")
+    redis_host: str = Field("localhost", env="REDIS_HOST")
+    redis_port: int = Field(6379, env="REDIS_PORT")
+    redis_db: int = Field(0, env="REDIS_DB")
+    redis_password: Optional[str] = Field(None, env="REDIS_PASSWORD")
+    redis_ssl: bool = Field(False, env="REDIS_SSL")
+
+    topic_extract_queue_backend: str = Field("memory", env="TOPIC_EXTRACT_QUEUE_BACKEND")
+    topic_extract_max_workers: int = Field(5, env="TOPIC_EXTRACT_MAX_WORKERS")
+    topic_extract_queue_limit: int = Field(20, env="TOPIC_EXTRACT_QUEUE_LIMIT")
+    topic_extract_queue_timeout_seconds: int = Field(300, env="TOPIC_EXTRACT_QUEUE_TIMEOUT_SECONDS")
+    topic_extract_queue_poll_interval_ms: int = Field(200, env="TOPIC_EXTRACT_QUEUE_POLL_INTERVAL_MS")
+    topic_extract_queue_lease_seconds: int = Field(900, env="TOPIC_EXTRACT_QUEUE_LEASE_SECONDS")
+
 
 @lru_cache
 def get_settings() -> Settings:
