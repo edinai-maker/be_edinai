@@ -137,6 +137,7 @@ async def create_lecture(
             text=request.text,
             metadata=request.metadata,
             fallback_used=lecture_data.get("fallback_used", False),
+            estimated_duration = lecture_data.get("estimated_duration"),
         )
         
         # Generate JSON file URL with class and subject

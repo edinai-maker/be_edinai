@@ -495,6 +495,7 @@ async def create_lecture(
     lecture_uid: Optional[str] = None,
     lecture_url: Optional[str] = None,
     reuse_existing: bool = False,
+    estimated_duration: Optional[int] = None,
 ) -> Dict[str, Any]:
     metadata = _default_metadata(metadata)
     admin_value = admin_id or metadata.get("admin_id") 
@@ -508,13 +509,27 @@ async def create_lecture(
     lecture_id = lecture_uid or reuse_lecture_uid or await _generate_lecture_id()
     created_at = datetime.utcnow()
 
+    
+    final_estimated_duration: Optional[int] = None
+    if isinstance(estimated_duration, (int, float)):
+        final_estimated_duration = int(estimated_duration)
+    elif isinstance(metadata, dict):
+        meta_estimate = metadata.get("estimated_duration") or metadata.get("requested_duration")
+        if isinstance(meta_estimate, (int, float)):
+            final_estimated_duration = int(meta_estimate)
+
+    if final_estimated_duration is None:
+        final_estimated_duration = len(slides) * 3
+
+    metadata.setdefault("estimated_duration", final_estimated_duration)
+
     record: Dict[str, Any] = {
         "lecture_id": lecture_id,
         "title": title,
         "language": language,
         "style": style,
         "requested_duration": duration,
-        "estimated_duration": len(slides) * 3,
+        "estimated_duration": final_estimated_duration,
         "total_slides": len(slides),
         "slides": slides,
         "context": context,

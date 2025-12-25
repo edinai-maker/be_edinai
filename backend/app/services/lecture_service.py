@@ -97,6 +97,7 @@ class LectureService:
         slides: List[Dict[str, Any]] = lecture_payload.get("slides", [])  # type: ignore[assignment]
         if not slides:
             raise RuntimeError("Lecture generation produced no slides")
+        estimated_duration=lecture_payload.get("estimated_duration")
         self._attach_static_image_links(slides)
         self._attach_static_video_links(slides)
 
@@ -115,6 +116,7 @@ class LectureService:
             text=text,
             metadata=metadata_payload,
             fallback_used=lecture_payload.get("fallback_used", False),
+            estimated_duration=estimated_duration,
             reuse_existing=reuse_existing,
         )
 

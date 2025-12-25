@@ -1229,12 +1229,16 @@ class GroqService:
         estimated_minutes = int(round(total_words / average_wpm)) if total_words else 0
 
         # Ensure minimum of 1 minute per populated slide to avoid zero estimates for sparse content
-        populated_slide_count = sum(1 for slide in slides if isinstance(slide, dict) and slide.get("narration"))
+        populated_slide_count = sum(
+            1 for slide in slides if isinstance(slide, dict) and slide.get("narration")
+        )
         estimated_minutes = max(estimated_minutes, populated_slide_count)
 
         if requested_duration:
             # Never exceed 20% above the requested duration to avoid unrealistic inflation
+            lower_cap = int(round(requested_duration))
             upper_cap = int(round(requested_duration * 1.2))
+            estimated_minutes = max(estimated_minutes, lower_cap)
             estimated_minutes = min(estimated_minutes, upper_cap)
 
         return estimated_minutes
