@@ -978,6 +978,7 @@ async def list_all_video_comments(
     )
     simplified_comments = [
         {
+            "id":comment.get("id"),
             "student_name": comment.get("student_name"),
             "comment": comment.get("comment"),
             # "commented_at": (
@@ -999,23 +1000,22 @@ async def list_all_video_comments(
             "comments": simplified_comments,
         },
     )
-    
-@router.delete("/comment/delete/{enrollment_number}", response_model=ResponseBase)
-async def delete_video_comments_by_enrollment(
-    enrollment_number: str,
+
+@router.delete("/comment/delete/{comment_id}", response_model=ResponseBase)
+async def delete_video_comment(
+    comment_id: int,
     current_user: dict = Depends(member_required(WorkType.STUDENT)),
 ) -> ResponseBase:
-    deleted = student_portal_service.delete_video_comments_for_admin_by_enrollment(
+    deleted = student_portal_service.delete_video_comment_for_admin(
         admin_id=current_user["admin_id"],
-        enrollment_number=enrollment_number,
+        comment_id=comment_id,
     )
 
     return ResponseBase(
         status=True,
-        message="Comments deleted successfully",
+        message="Comment deleted successfully",
         data={
-            "deleted_count": len(deleted),
-            "comments": deleted,
+            "comment": deleted,
         },
     )
 
