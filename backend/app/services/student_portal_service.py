@@ -687,8 +687,12 @@ def list_video_comments(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
     return student_portal_video_repository.list_comments(video_id)
 
-def list_all_video_comments_for_admin(*, admin_id: int) -> List[Dict[str, Any]]:
-    return student_portal_video_repository.list_comments_for_admin(admin_id)
+def list_all_video_comments_for_admin(
+    *,
+    admin_id: int,
+    video_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    return student_portal_video_repository.list_comments_for_admin(admin_id, video_id=video_id)
 
 
 def list_video_comments_for_admin(
@@ -736,7 +740,7 @@ def delete_video_comments_for_admin_by_enrollment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No comments found for enrollment")
 
     return records
-    
+
 def add_video_comment(
     *,
     current_context: Dict[str, Optional[str]],
@@ -902,8 +906,18 @@ def list_watched_lecture_cards(
         watched_seconds = record.get("user_watch_duration_seconds") or record.get("watch_duration_seconds") or 0
         if watched_seconds <= 0:
             continue
+        video_id = record.get("id") or record.get("video_id")
+        if isinstance(video_id, str) and video_id.isdigit():
+            video_id = int(video_id)
+        elif hasattr(video_id, "__int__") and not isinstance(video_id, bool):
+            try:
+                video_id = int(video_id)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                video_id = None
+
         lectures.append(
             {
+                "video_id": video_id,
                 "lecture_title": record.get("title"),
                 "subject": record.get("subject"),
                 "chapter": record.get("chapter_name"),

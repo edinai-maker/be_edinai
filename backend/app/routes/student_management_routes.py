@@ -970,9 +970,11 @@ async def list_student_filters(
 @router.get("/comment", response_model=ResponseBase)
 async def list_all_video_comments(
     current_user: dict = Depends(member_required(WorkType.STUDENT)),
+    video_id: Optional[int] = Query(default=None),
 ) -> ResponseBase:
     comments = student_portal_service.list_all_video_comments_for_admin(
         admin_id=current_user["admin_id"],
+        video_id=video_id,
     )
     simplified_comments = [
         {
@@ -984,7 +986,7 @@ async def list_all_video_comments(
             # )
             # or comment.get("created_at"),
             "commented_time_ago": _format_relative_time(_parse_comment_timestamp(comment.get("created_at"))),
-            "photo_path":comment.get("student_photo_path")
+            "photo_path": comment.get("student_photo_path"),
         }
         for comment in comments
     ]
@@ -997,6 +999,7 @@ async def list_all_video_comments(
             "comments": simplified_comments,
         },
     )
+    
 @router.delete("/comment/delete/{enrollment_number}", response_model=ResponseBase)
 async def delete_video_comments_by_enrollment(
     enrollment_number: str,

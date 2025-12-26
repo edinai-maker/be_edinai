@@ -1068,7 +1068,7 @@ def list_comments(video_id: int) -> List[Dict[str, Any]]:
         cur.execute(query, {"video_id": video_id})
         return cur.fetchall()
 
-def list_comments_for_admin(admin_id: int) -> List[Dict[str, Any]]:
+def list_comments_for_admin(admin_id: int, video_id: Optional[int] = None) -> List[Dict[str, Any]]:
     query = """
         SELECT
             c.id,
@@ -1077,6 +1077,7 @@ def list_comments_for_admin(admin_id: int) -> List[Dict[str, Any]]:
             c.comment,
             c.created_at,
             c.like_count,
+            p.photo_path AS student_photo_path,
             COALESCE(
                 NULLIF(TRIM(CONCAT_WS(' ', p.first_name, p.middle_name)), ''),
                 NULLIF(TRIM(CONCAT_WS(' ', r.first_name, r.last_name)), ''),
@@ -1090,11 +1091,16 @@ def list_comments_for_admin(admin_id: int) -> List[Dict[str, Any]]:
             ON LOWER(r.enrollment_number) = LOWER(c.enrollment_number)
            AND r.admin_id = v.admin_id
         WHERE v.admin_id = %(admin_id)s
-        ORDER BY c.created_at DESC
     """
+    params: Dict[str, Any] = {"admin_id": admin_id}
+    if video_id is not None:
+        query += " AND v.id = %(video_id)s"
+        params["video_id"] = video_id
+
+    query += "\n        ORDER BY c.created_at DESC\n    "
 
     with get_pg_cursor() as cur:
-        cur.execute(query, {"admin_id": admin_id})
+        cur.execute(query, params)
         return cur.fetchall()
 
 
