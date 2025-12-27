@@ -161,7 +161,109 @@ def count_roster_students(admin_id: int, *, member_id: Optional[int] = None) -> 
         (count,) = cur.fetchone()
     return int(count)
 
+def count_watched_lectures(admin_id: int, *, member_id: Optional[int] = None) -> int:
 
+    """Aggregate total watched lecture records for the admin (optionally filtered by member)."""
+
+
+
+    params: Dict[str, Any] = {"admin_id": admin_id}
+
+    member_clause = ""
+
+    if member_id is not None:
+
+        params["member_id"] = member_id
+
+        member_clause = " AND sre.assigned_member_id = %(member_id)s"
+
+
+
+    query = f"""
+
+        SELECT COUNT(*) AS watched_count
+
+        FROM student_portal_video_engagement e
+
+        JOIN student_portal_videos v ON v.id = e.video_id
+
+        JOIN student_roster_entries sre
+
+          ON sre.enrollment_number = e.enrollment_number
+
+         AND sre.admin_id = v.admin_id
+
+        WHERE v.admin_id = %(admin_id)s
+
+          AND e.watch_duration_seconds > 0
+
+          {member_clause}
+
+    """
+
+
+
+    with get_pg_cursor(dict_rows=False) as cur:
+
+        cur.execute(query, params)
+
+        (count,) = cur.fetchone() or (0,)
+
+
+
+    return int(count or 0)
+
+
+
+
+
+def count_profile_completed_students(admin_id: int, *, member_id: Optional[int] = None) -> int:
+
+    """Return the number of roster students with completed profiles."""
+
+
+
+    params: Dict[str, Any] = {"admin_id": admin_id}
+
+    member_clause = ""
+
+    if member_id is not None:
+
+        params["member_id"] = member_id
+
+        member_clause = " AND sre.assigned_member_id = %(member_id)s"
+
+
+
+    query = f"""
+
+        SELECT COUNT(*)
+
+        FROM student_roster_entries sre
+
+        LEFT JOIN student_profiles sp
+
+          ON sp.enrollment_number = sre.enrollment_number
+
+        WHERE sre.admin_id = %(admin_id)s
+
+          AND sp.id IS NOT NULL
+
+          {member_clause}
+
+    """
+
+
+
+    with get_pg_cursor(dict_rows=False) as cur:
+
+        cur.execute(query, params)
+
+        (count,) = cur.fetchone() or (0,)
+
+
+
+    return int(count or 0)
 def fetch_roster_entries(admin_id: int, *, member_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """Return stored roster entries for an admin ordered by latest."""
 
