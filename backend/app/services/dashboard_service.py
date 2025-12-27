@@ -575,20 +575,39 @@ def get_member_dashboard(*, member_id: int, admin_id: int, work_type: str) -> Di
             "chapter_overview": chapter_overview
         }
     elif work_type == "student":
-        # total_chapters = dashboard_repository.count_members(admin_id, work_type="chapter", active_only=True)
         totals = student_portal_video_repository.get_video_totals_for_std(admin_id=admin_id, std=None)
-        total_lectures = totals.get("total_videos", 0) # Student dashboard must mirror legacy SM API (static lecture counts)
+        total_catalog_lectures = totals.get("total_videos", 0) or 0
         total_students = roster_repository.count_roster_students(admin_id, member_id=member_id)
+        watched_lectures = roster_repository.count_watched_lectures(admin_id, member_id=member_id)
+        active_students = roster_repository.count_profile_completed_students(admin_id, member_id=member_id)
+
+        max_watchable = (total_catalog_lectures or 0) * (total_students or 0)
+        progress_percentage = 0.0
+        if max_watchable:
+            progress_percentage = min(round((watched_lectures / max_watchable) * 100, 2), 100.0)
+
+        active_percentage = 0.0
+        if total_students:
+            active_percentage = round((active_students / total_students) * 100, 2)
+
         payload = {
             "student_metrics": {
-                # "total_chapters": total_chapters,
-                "total_lectures": total_lectures,
+                "total_lectures": total_catalog_lectures,
+                "total_watched_lectures": watched_lectures,
+                "student_progress_total": watched_lectures,
                 "total_students": total_students,
+                "active_students": active_students,
+                "student_active_count": active_students,
                 "total_paid": 0,
                 "progress": {
-                    "completed_lectures": 0,
-                    "total_available_lectures": total_lectures,
-                    "progress_percentage": 0,
+                    "completed_lectures": watched_lectures,
+                    "total_available_lectures": total_catalog_lectures,
+                    "progress_percentage": progress_percentage,
+                    "watched_lecture_count": watched_lectures,
+                    "max_watchable_lecture_views": max_watchable,
+                    "active_student_count": active_students,
+                    "active_percentage": active_percentage,
+                    "total_students": total_students,
                     "last_activity": member["last_login"].isoformat() if member.get("last_login") else None,
                 },
             }
@@ -631,10 +650,26 @@ def get_member_dashboard(*, member_id: int, admin_id: int, work_type: str) -> Di
         **payload,
     }
 
+
 def get_student_management_dashboard(admin_id: int) -> Dict[str, object]:
     """Return condensed student management metrics for the admin portal dashboard."""
 
     total_rostered_students = roster_repository.count_roster_students(admin_id)
+    watched_lectures = roster_repository.count_watched_lectures(admin_id)
+    completed_profiles = roster_repository.count_profile_completed_students(admin_id)
+
+    video_totals = student_portal_video_repository.get_video_totals_for_std(admin_id=admin_id, std=None)
+    total_catalog_lectures = video_totals.get("total_videos", 0) or 0
+    max_watchable = (total_catalog_lectures or 0) * (total_rostered_students or 0)
+
+    progress_percentage = 0.0
+    if max_watchable:
+        progress_percentage = min(round((watched_lectures / max_watchable) * 100, 2), 100.0)
+
+    active_percentage = 0.0
+    if total_rostered_students:
+        active_percentage = round((completed_profiles / total_rostered_students) * 100, 2)
+
     student_members = member_repository.list_members(admin_id, work_type="student", active_only=True)
     if not student_members:
         student_members = member_repository.list_members(admin_id, work_type="student", active_only=False)
@@ -659,13 +694,22 @@ def get_student_management_dashboard(admin_id: int) -> Dict[str, object]:
 
     student_metrics = {
         "total_chapters": total_chapters,
-        "total_lectures": total_lectures,
         "total_students": total_rostered_students,
+        "total_lectures": total_catalog_lectures,
+        "total_watched_lectures": watched_lectures,
+        "student_progress_total": watched_lectures,
+        "active_students": completed_profiles,
+        "student_active_count": completed_profiles,
         "total_paid": 0,
         "progress": {
-            "completed_lectures": 0,
-            "total_available_lectures": total_lectures,
-            "progress_percentage": 0,
+            "completed_lectures": watched_lectures,
+            "total_available_lectures": total_catalog_lectures,
+            "progress_percentage": progress_percentage,
+            "watched_lecture_count": watched_lectures,
+            "max_watchable_lecture_views": max_watchable,
+            "active_student_count": completed_profiles,
+            "active_percentage": active_percentage,
+            "total_students": total_rostered_students,
             "last_activity": last_activity,
         },
     }
@@ -675,6 +719,7 @@ def get_student_management_dashboard(admin_id: int) -> Dict[str, object]:
         "work_type": "student",
         "student_metrics": student_metrics,
     }
+
 def get_summary(admin_id: int) -> Dict[str, object]:
     summary = dashboard_repository.dashboard_summary(admin_id)
     summary["alerts"] = []
